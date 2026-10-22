@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build an iOS 16.2+ rootless browser-prototype deb on macOS, without SSH.
 
-The verified upstream deb supplies unchanged BTstack runtime and install scripts.
+The verified upstream deb supplies the unchanged BTstack runtime.
 The modified UI/network service are compiled from this checkout and ad-hoc
 signed with their entitlements; postinst re-signs with on-device ldid and stops the probe on removal.
 Only Python's standard library and Xcode command-line tools are required.

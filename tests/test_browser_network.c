@@ -26,11 +26,15 @@ static SCNetAddress primary(unsigned index) {
 static Fixture fixture(void) { Fixture f = {.count=1, .local=true}; f.all[0]=primary(9); return f; }
 static int snapshot(void *context, SCNetAddress *out, int capacity) {
     Fixture *f=context; if (f->inspectError) return -f->inspectError;
-    assert(f->count <= capacity); memcpy(out, f->all, f->count * sizeof(*out)); return f->count;
+    assert(f->count+1 <= capacity); memcpy(out, f->all, f->count * sizeof(*out));
+    SCNetAddress loopback={.address=ip("127.0.0.1"),.mask=ip("255.0.0.0"),.index=1,.flags=IFF_UP|IFF_LOOPBACK};
+    snprintf(loopback.name,sizeof(loopback.name),"lo0"); out[f->count]=loopback;
+    return f->count+1;
 }
 static int alias(void *context, const SCNetAddress *a, bool add) {
     Fixture *f=context;
     assert(a->address == ip(SC_COMPAT_IP) && a->mask == UINT32_MAX);
+    assert(a->index == 1 && !strcmp(a->name,"lo0"));
     if (add) { f->adds++; if (f->addError) return f->addError; f->all[f->count++]=*a; }
     else {
         f->removes++; if (f->removeError) return f->removeError;

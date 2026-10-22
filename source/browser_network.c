@@ -99,7 +99,15 @@ void sc_network_tick(SCNetState *s, const SCNetOps *ops) {
         for (int i = 0; i < n; i++) if (all[i].address == target) {
             result(s, "address_conflict", "Compatibility address already exists; not adopted or removed", 0); return;
         }
-        s->alias = primary;
+        /* Keep the compatibility IP off the hotspot bridge so Bonjour and
+         * CarPlay never advertise it as a native hotspot address. Darwin's
+         * local host route delivers it locally; replies use the existing
+         * connected hotspot route, checked by the probe for each client. */
+        SCNetAddress loopback = {0};
+        for (int i = 0; i < n; i++) if ((all[i].flags & (IFF_UP | IFF_LOOPBACK)) == (IFF_UP | IFF_LOOPBACK) &&
+            (ntohl(all[i].address) >> 24) == 127) loopback = all[i];
+        if (!loopback.index) { result(s, "loopback_unavailable", "No active local loopback interface; no changes made", 0); return; }
+        s->alias = loopback;
         s->alias.address = target; s->alias.mask = UINT32_MAX;
         int error = ops->alias(ops->context, &s->alias, true);
         if (error) { s->failures++; result(s, "add_failed", "SIOCAIFADDR /32 alias", error); return; }
