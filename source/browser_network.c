@@ -15,6 +15,7 @@
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 static void result(SCNetState *s, const char *phase, const char *text, int error) {
     s->ready = !strcmp(phase, "local_ready");
@@ -32,6 +33,17 @@ static bool present(SCNetAddress *a, int n, const SCNetAddress *target) {
 static bool private_ip(uint32_t address) {
     uint32_t n = ntohl(address);
     return (n >> 24) == 10 || (n >> 20) == 0xac1 || (n >> 16) == 0xc0a8;
+}
+static double net_now(const SCNetOps *ops) {
+    if (ops->now) return ops->now(ops->context);
+    struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
+    return t.tv_sec + t.tv_nsec / 1e9;
+}
+static void failed(SCNetState *s, const SCNetOps *ops, const char *phase, const char *detail, int error) {
+    if (s->failures < 32) s->failures++;
+    unsigned delay = s->failures > 5 ? 30 : 1U << (s->failures - 1);
+    s->retryAt = net_now(ops) + delay;
+    result(s, phase, detail, error);
 }
 bool sc_network_cleanup(SCNetState *s, const SCNetOps *ops) {
     s->ready = false;
@@ -63,12 +75,10 @@ void sc_network_tick(SCNetState *s, const SCNetOps *ops) {
         /* Do not install anything while rollback is unconfirmed. */
         sc_network_cleanup(s, ops); return;
     }
-    if (s->failures >= 3) {
-        if (s->owned && !sc_network_cleanup(s, ops)) return;
-        result(s, "retry_required", "Three address/route failures; check log, then disable and re-enable probe", 0); return;
+    if (net_now(ops) < s->retryAt) {
+        result(s, "retry_wait", "Temporary address/route failure; automatic retry with bounded backoff", 0); return;
     }
     if (s->owned && (!present(all, n, &s->primary) || !present(all, n, &s->alias))) {
-        if (present(all, n, &s->primary) && !present(all, n, &s->alias)) s->failures++;
         if (!sc_network_cleanup(s, ops)) return;
         n = ops->snapshot(ops->context, all, SC_NET_MAX);
         if (n < 0) { result(s, "inspect_failed", "Recheck hotspot", -n); return; }
@@ -110,7 +120,7 @@ void sc_network_tick(SCNetState *s, const SCNetOps *ops) {
         s->alias = loopback;
         s->alias.address = target; s->alias.mask = UINT32_MAX;
         int error = ops->alias(ops->context, &s->alias, true);
-        if (error) { s->failures++; result(s, "add_failed", "SIOCAIFADDR /32 alias", error); return; }
+        if (error) { failed(s, ops, "add_failed", "SIOCAIFADDR /32 alias", error); return; }
         s->owned = true;
     }
     n = ops->snapshot(ops->context, all, SC_NET_MAX);
@@ -118,10 +128,10 @@ void sc_network_tick(SCNetState *s, const SCNetOps *ops) {
     int error = ops->route(ops->context, target, &route);
     bool verified = n >= 0 && present(all, n, &s->primary) && present(all, n, &s->alias) && !error && route.local;
     if (!verified) {
-        s->failures++;
         if (!sc_network_cleanup(s, ops)) return;
-        result(s, "verify_failed", "Alias/primary/local route check failed; rolled back", error); return;
+        failed(s, ops, "verify_failed", "Alias/primary/local route check failed; rolled back", error); return;
     }
+    s->failures = 0; s->retryAt = 0;
     result(s, "local_ready", "Local /32 alias and local host route verified; Tesla access not yet proven", 0);
 }
 
@@ -203,7 +213,7 @@ int sc_network_route(uint32_t ip, SCNetRoute *out) {
     close(fd); return error;
 }
 static int route(void *unused, uint32_t ip, SCNetRoute *out) { (void)unused; return sc_network_route(ip, out); }
-SCNetOps sc_network_darwin_ops(void) { return (SCNetOps){NULL, snapshot, alias, route}; }
+SCNetOps sc_network_darwin_ops(void) { return (SCNetOps){NULL, snapshot, alias, route, NULL}; }
 
 static volatile sig_atomic_t guardStopped;
 static void guard_signal(int signal) { (void)signal; guardStopped = 1; }

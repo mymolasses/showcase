@@ -17,6 +17,7 @@
 typedef struct {
     SCNetAddress all[8]; int count, adds, removes, addError, removeError, inspectError, routeError;
     bool local;
+    double clock;
 } Fixture;
 static uint32_t ip(const char *text) { uint32_t value; assert(inet_pton(AF_INET, text, &value) == 1); return value; }
 static SCNetAddress primary(unsigned index) {
@@ -45,7 +46,8 @@ static int alias(void *context, const SCNetAddress *a, bool add) {
     return 0;
 }
 static int route(void *context, uint32_t ip, SCNetRoute *r) { (void)ip; Fixture *f=context; *r=(SCNetRoute){9,f->local}; return f->routeError; }
-static SCNetOps ops(Fixture *f) { return (SCNetOps){f,snapshot,alias,route}; }
+static double fixture_now(void *context) { return ((Fixture *)context)->clock; }
+static SCNetOps ops(Fixture *f) { return (SCNetOps){f,snapshot,alias,route,fixture_now}; }
 static void tick(SCNetState *s, Fixture *f) { SCNetOps o=ops(f); sc_network_tick(s,&o); }
 static void reset(SCNetState *s, Fixture *f) { memset(s,0,sizeof(*s)); *f=fixture(); }
 static void request(int fd, SCNetState *s) {
@@ -69,7 +71,17 @@ int main(void) {
     tick(&s,&f); assert(!strcmp(s.phase,"address_conflict") && !f.adds && !f.removes);
     o=ops(&f); assert(sc_network_cleanup(&s,&o)); assert(f.count==2);
     reset(&s,&f); f.addError=EPERM; tick(&s,&f); assert(!s.owned && !s.ready && f.count==1);
-    tick(&s,&f); tick(&s,&f); tick(&s,&f); assert(f.adds==3 && !strcmp(s.phase,"retry_required"));
+    tick(&s,&f); assert(f.adds==1 && !strcmp(s.phase,"retry_wait"));
+    f.clock=1; tick(&s,&f); assert(f.adds==2 && s.failures==2 && s.retryAt==3);
+    f.clock=3; tick(&s,&f); assert(f.adds==3 && s.failures==3 && s.retryAt==7);
+    f.addError=0; f.clock=7; tick(&s,&f); assert(s.ready && s.failures==0 && s.retryAt==0);
+    // A later isolated failure starts at one again, not lifetime failure four.
+    f.local=false; tick(&s,&f); assert(s.failures==1 && s.retryAt==8 && !s.owned);
+    f.local=true; f.clock=8; tick(&s,&f); assert(s.ready && s.failures==0);
+    // Persistent errors back off automatically, capped at 30 seconds.
+    reset(&s,&f); f.addError=EPERM;
+    for(int i=0;i<12;i++) { f.clock=s.retryAt; tick(&s,&f); assert(s.retryAt-f.clock<=30 && !s.owned); }
+    f.addError=0; f.clock=s.retryAt; tick(&s,&f); assert(s.ready && s.failures==0);
     // Local host-route failure rolls back precisely the newly created /32.
     reset(&s,&f); f.local=false; tick(&s,&f); assert(!s.ready && f.adds==1 && f.removes==1 && f.count==1);
     reset(&s,&f); f.routeError=ETIMEDOUT; tick(&s,&f); assert(f.count==1 && !s.owned);

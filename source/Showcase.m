@@ -3649,6 +3649,9 @@ static pid_t reusable_baa_broker(void) {
     NSMutableString *message = [NSMutableString stringWithFormat:@"状态：%@\n%@\n已收到 HTTP 探测请求：%@ 次\n",
         s[@"phase"] ?: @"unknown", s[@"detail"] ?: @"", s[@"probeRequests"] ?: @0];
     [message appendFormat:@"HTTP 80：%@\n",[s[@"port80"] boolValue] ? @"可用" : @"不可用，请使用备用入口"];
+    [message appendFormat:@"版本：%@ / 构建 %@\n连续失败：%@ / 自动重试等待：%@ ms\n后台路由检查耗时：%@ ms\n",
+        s[@"version"] ?: @"未知", s[@"build"] ?: @"未知", s[@"consecutiveFailures"] ?: @0,
+        s[@"retryInMs"] ?: @0, s[@"routeCheckDurationMs"] ?: @0];
     NSString *primary = s[@"hotspotAddress"];
     if (primary.length) [message appendFormat:@"\n普通热点探测：http://%@:8081/probe\n", primary];
     if ([s[@"localReady"] boolValue]) {

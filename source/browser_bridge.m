@@ -18,6 +18,12 @@
 #include <errno.h>
 #include "browser_bridge.h"
 #include "browser_assets.h"
+#ifndef SHOWCASE_RELEASE_VERSION
+#define SHOWCASE_RELEASE_VERSION "development"
+#endif
+#ifndef SHOWCASE_BUILD_NUMBER
+#define SHOWCASE_BUILD_NUMBER "development"
+#endif
 
 #define MAX_CLIENTS 8
 #define MAX_QUEUE_BYTES (8 * 1024 * 1024)
@@ -168,7 +174,7 @@ static void handle_http(SCBrowserClient *c) {
         }
         NSDictionary *state = @{@"active": @(active), @"configured": @(configuration != nil),
             @"width": @(videoWidth), @"height": @(videoHeight), @"generation": @(generation),
-            @"version": @"Browser5", @"receivedFrames": @(receivedFrames), @"timestampFallbacks": @(timestampFallbacks), @"viewers": @(viewers), @"controllers": @(controllers),
+            @"version": @SHOWCASE_RELEASE_VERSION, @"build": @SHOWCASE_BUILD_NUMBER, @"receivedFrames": @(receivedFrames), @"timestampFallbacks": @(timestampFallbacks), @"viewers": @(viewers), @"controllers": @(controllers),
             @"mediaQueueBytes": @(queued), @"congestionRecoveries": @(congestionRecoveries),
             @"frameAgeMs": @(lastFrameAt ? (browser_now() - lastFrameAt) * 1000 : -1)};
         http_reply(c, 200, @"application/json", [NSJSONSerialization dataWithJSONObject:state options:0 error:NULL]); return;

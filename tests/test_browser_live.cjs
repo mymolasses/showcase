@@ -23,7 +23,7 @@ const packet = bytes => {
   const server = http.createServer((req, res) => {
     if (req.url === '/status') {
       res.setHeader('Content-Type', 'application/json');
-      return res.end(JSON.stringify({active: true, configured: true, viewers: 0, controllers: 0}));
+      return res.end(JSON.stringify({version: 'test', build: '0', active: true, configured: true, viewers: 0, controllers: 0}));
     }
     const name = req.url === '/' ? 'index.html' : req.url === '/player.js' ? 'player.js' : null;
     if (!name) { res.writeHead(404); return res.end(); }
@@ -82,6 +82,16 @@ const packet = bytes => {
     assert.equal(await page.locator('input').count(), 0);
     const decoded = () => page.locator('video').evaluate(v => v.getVideoPlaybackQuality().totalVideoFrames);
     await page.waitForFunction(() => document.querySelector('video').currentTime > 1);
+    await page.click('#menu'); await page.click('#diagnostics');
+    await page.waitForFunction(() => {
+      const text=document.querySelector('#diagnostic-data').textContent;
+      if(!text)return false;const d=JSON.parse(text);return d.receivedFps>0 && d.presentedFps>0 && d.version==='test';
+    });
+    // Public HTTP IPs may lack navigator.clipboard: exercise the copy fallback.
+    await page.evaluate(()=>Object.defineProperty(navigator,'clipboard',{value:undefined,configurable:true}));
+    await page.click('#diagnostic-copy');
+    await page.waitForFunction(()=>document.querySelector('#diagnostic-copy').textContent==='已复制');
+    await page.click('#diagnostic-close'); await page.click('#menu');
     const first = await decoded(); await page.waitForTimeout(2200);
     assert(await decoded() > first + 30, 'Frames must keep decoding without reconnect');
     const position = () => page.locator('video').evaluate(v => v.currentTime);

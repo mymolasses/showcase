@@ -21,10 +21,12 @@ typedef struct {
     int (*snapshot)(void *, SCNetAddress *, int); /* count or negative errno */
     int (*alias)(void *, const SCNetAddress *, bool add); /* errno, 0 on success */
     int (*route)(void *, uint32_t, SCNetRoute *);
+    double (*now)(void *); /* monotonic seconds; NULL uses CLOCK_MONOTONIC */
 } SCNetOps;
 typedef struct {
     bool owned, ready;
     unsigned failures;
+    double retryAt;
     SCNetAddress primary;
     SCNetAddress alias;
     char phase[32], detail[224];

@@ -72,7 +72,7 @@ const domain = 'carplay.showcase.test';
     const tlsPort=tlsReserve.address().port; await new Promise(resolve=>tlsReserve.close(resolve));
     fs.writeFileSync(path.join(work,'browser-web.json'),JSON.stringify({testBackendPort:port, ...(useTLS ? {domain, identityPassword:certificate.password,testAnchor:certificate.root} : {})}));
     const gatewayState = path.join(work,'web-state.json');
-    gateway=spawn(path.join(work,'gateway'),['--parent',String(process.pid),'--test-port',String(frontPort),'--test-state',gatewayState,...(useTLS ? ['--test-https-port',String(tlsPort)] : [])],{stdio:['ignore','pipe','pipe']});
+    gateway=spawn(path.join(work,'gateway'),['--parent',String(process.pid),'--test-route-delay-ms','1500','--test-port',String(frontPort),'--test-state',gatewayState,...(useTLS ? ['--test-https-port',String(tlsPort)] : [])],{stdio:['ignore','pipe','pipe']});
     gateway.stderr.on('data',bytes=>{stderr+=bytes.toString();});
     await until(()=>fs.existsSync(gatewayState),'gateway startup');
     const pageErrors = [];
@@ -100,6 +100,13 @@ const domain = 'carplay.showcase.test';
     await page.mouse.move(rect.x + rect.width * 0.6, rect.y + rect.height * 0.6, {steps: 8});
     await page.mouse.up();
     await until(() => /TOUCH 0 960 540/.test(output) && /TOUCH 1 /.test(output) && /TOUCH 2 /.test(output), 'pointer -> production touch callback');
+    // A 1.5s route check must not block HTTP or the active media/control relay.
+    const diagURL=useTLS ? `https://${domain}:${tlsPort}/probe.json` : `http://127.0.0.1:${frontPort}/probe.json`;
+    for(let i=0;i<8;i++) {
+      const elapsed=await page.evaluate(async url=>{const start=performance.now();const r=await fetch(url);if(!r.ok)throw Error('probe response');await r.json();return performance.now()-start;},diagURL);
+      assert(elapsed<1000, 'route worker blocked forwarding: '+elapsed+'ms');
+      await page.waitForTimeout(250);
+    }
     // Exercise the actual static-screen/gap and repeated-config failure paths.
     const initialTime = await page.locator('video').evaluate(v => v.currentTime);
     helper.stdin.write('s');

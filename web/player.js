@@ -82,6 +82,7 @@
   let fill = true;
   let config = null, player = null, pointer = null, displayed = false;
   let statusBusy = false, active = false, lastFrame = 0, lastKeyRequest = 0, retry = 0, failureTimes = [];
+  const metrics = {received: 0, bytes: 0, presented: 0, frameSignal: '不可用', recoveries: 0, reconnects: 0, lastReason: '首次连接', server: null};
   const state = message => { $('state').textContent = message; };
   const notice = message => { $('notice').textContent = message; $('notice').hidden = !message; };
   const send = object => { if (control?.readyState !== WebSocket.OPEN) return false; control.send(JSON.stringify(object)); return true; };
@@ -110,6 +111,7 @@
   function recover(message) {
     const now = performance.now(); failureTimes = failureTimes.filter(t => now - t < 30000);
     if (!desired) return;
+    metrics.recoveries++; metrics.lastReason = message;
     if (failureTimes.length >= 3) { stop(message + '；请尝试降低接收机网页分辨率后重启 CarPlay'); return; }
     failureTimes.push(now);
     const info = config; resetPlayer(); notice('正在恢复视频：' + message);
@@ -126,20 +128,42 @@
     const source = new Source(), url = URL.createObjectURL(source);
     let buffer = null, closed = false, queue = [], queued = 0, waitingKey = true, failed = false;
     let previous = null, cursor = 0, sequence = 0, lastMicros = null, lastKey = 0, flushTimer = null;
-    let lastPosition = 0, progressedAt = performance.now(), appendedAt = 0;
+    let lastPosition = 0, progressedAt = performance.now(), lastInputAt = 0, lastSeekAt = -Infinity;
+    let inputCount = 0, progressedInput = 0, seekAttempts = 0, frameCallback = null, qualityFrames = 0;
+    let keyTimes = [], trimBefore = 0;
+    const hasFrameCallback = typeof video.requestVideoFrameCallback === 'function';
+    const markProgress = () => {
+      // A single picture produced by our own seek is not sustained playback.
+      if (performance.now() - lastSeekAt < 500) return;
+      progressedAt = performance.now(); progressedInput = inputCount; seekAttempts = 0;
+    };
+    const onFrame = () => {
+      if (closed) return;
+      metrics.presented++; metrics.frameSignal = '画面提交回调'; markProgress();
+      frameCallback = video.requestVideoFrameCallback(onFrame);
+    };
+    if (hasFrameCallback) frameCallback = video.requestVideoFrameCallback(onFrame);
     const resume = () => {
       if (closed || failed || !video.buffered.length) return;
       const now = performance.now(), ranges = video.buffered;
       const start = ranges.start(ranges.length - 1), end = ranges.end(ranges.length - 1);
-      if (Math.abs(video.currentTime - lastPosition) > 0.005) progressedAt = now;
-      // CarPlay sends sparse updates on static screens. Embedded Chromium can
-      // remain in HAVE_CURRENT_DATA after running into the previous live edge.
-      // Seek inside newly appended data even when lag is below the latency cap.
-      const stuck = now - progressedAt > 750 && appendedAt > progressedAt;
-      if (!video.seeking && (video.currentTime < start || end - video.currentTime > 0.65 || stuck)) {
-        // Leave several frames ahead so older decoders can leave buffering.
+      if (!hasFrameCallback) {
+        const quality = video.getVideoPlaybackQuality?.();
+        if (quality) {
+          const count = quality.totalVideoFrames - quality.droppedVideoFrames;
+          if (count > qualityFrames) { metrics.presented += count - qualityFrames; markProgress(); }
+          qualityFrames = Math.max(0, count); metrics.frameSignal = '浏览器帧计数';
+        } else if (!video.seeking && video.currentTime > lastPosition + 0.005) markProgress();
+      }
+      const receiving = inputCount - progressedInput >= 3 && now - lastInputAt < 1500;
+      const stuck = receiving && now - progressedAt > 1000;
+      if (stuck && ((seekAttempts >= 2 && now - lastSeekAt > 2000) || (video.seeking && now - progressedAt > 5000))) {
+        fail('视频持续停滞，重建播放器'); return;
+      }
+      if (!video.seeking && seekAttempts < 2 && now - lastSeekAt > 1500 &&
+          (video.currentTime < start || end - video.currentTime > 0.65 || stuck)) {
         video.currentTime = Math.max(start, end - 0.15);
-        progressedAt = now;
+        lastSeekAt = now; seekAttempts++;
       }
       lastPosition = video.currentTime;
       video.playbackRate = 1;
@@ -149,7 +173,15 @@
       if (!closed && !failed) { failed = true; setTimeout(() => { if (!closed) recover(message); }, 300); }
     };
     const pump = () => {
-      if (closed || failed || !buffer || buffer.updating || !queue.length) return;
+      if (closed || failed || !buffer || buffer.updating) return;
+      // Eviction gets an updateend turn even under continuous append traffic.
+      if (trimBefore > 0) {
+        const cut = trimBefore; trimBefore = 0;
+        try { buffer.remove(0, cut); keyTimes = keyTimes.filter(t => t >= cut); }
+        catch (_) { fail('历史视频缓冲清理失败'); }
+        return;
+      }
+      if (!queue.length) return;
       const next = queue.shift(); queued -= next.length;
       try { buffer.appendBuffer(next); } catch (_) { fail('视频缓冲积压'); }
     };
@@ -161,6 +193,7 @@
     // Long idle gaps are compacted; they are not a broken CarPlay session.
     const flush = duration => {
       if (!previous) return;
+      if (previous.key) keyTimes.push(cursor / 90000);
       append(fragment(++sequence, previous.bytes, previous.key, cursor, duration));
       cursor += duration; previous = null;
     };
@@ -172,7 +205,7 @@
         buffer = source.addSourceBuffer(mime);
         source.duration = Infinity;
         buffer.addEventListener('updateend', () => {
-          if (closed) return; appendedAt = performance.now(); resume(); pump();
+          if (closed) return; resume(); pump();
         });
         buffer.addEventListener('error', () => fail('视频解码失败'));
         const init = initMp4(info.avcc, info.width, info.height);
@@ -182,9 +215,12 @@
     const timer = setInterval(() => {
       if (closed || failed || !buffer || !video.buffered.length) return;
       resume();
-      const trim = Math.min(lastKey, video.currentTime - 8);
-      if (!buffer.updating && !queue.length && trim > video.buffered.start(0) + 2)
-        try { buffer.remove(0, trim); } catch (_) { /* next tick */ }
+      const history = video.currentTime - video.buffered.start(0);
+      // Request a fresh IDR before old data becomes impossible to evict safely.
+      if (history > 10 && video.currentTime - lastKey > 8) requestKey();
+      if (history > 30) { fail('历史缓冲超过上限，重建播放器'); return; }
+      const safe = keyTimes.filter(t => t <= video.currentTime - 8).pop() || 0;
+      if (safe > video.buffered.start(0) + 2) { trimBefore = safe; pump(); }
     }, 250);
     return {
       feed(bytes, key, micros) {
@@ -192,6 +228,7 @@
         const actualKey = checkFrame(bytes);
         if (key && !actualKey) throw Error('Invalid keyframe');
         if (!Number.isSafeInteger(micros) || micros < 0) throw Error('Invalid frame timestamp');
+        inputCount++; lastInputAt = performance.now();
         // Arrival order is decode order for the supported no-B-frame stream.
         // Repeated/unusable sender PTS must not discard valid decoded pictures.
         const delta = lastMicros === null ? 3000 : Math.round((micros - lastMicros) * 0.09);
@@ -202,8 +239,14 @@
         previous = {bytes: bytes.slice(), key};
         flushTimer = setTimeout(() => { if (!closed) flush(3000); }, 80);
       },
+      stats() {
+        const ranges = video.buffered;
+        return {waitingKey, seekAttempts, queuedBytes: queued, bufferedAheadMs: ranges.length ? Math.round((ranges.end(ranges.length - 1) - video.currentTime) * 1000) : 0,
+          historySeconds: ranges.length ? Math.round(video.currentTime - ranges.start(0)) : 0};
+      },
       close() {
         closed = true; clearInterval(timer); clearTimeout(flushTimer); URL.revokeObjectURL(url); queue = [];
+        if (frameCallback !== null) video.cancelVideoFrameCallback?.(frameCallback);
         video.removeAttribute('src'); video.load(); video.playbackRate = 1;
       }
     };
@@ -213,10 +256,11 @@
     try {
       const response = await fetch('/status', {cache: 'no-store', signal: abort.signal});
       if (!response.ok) throw Error('接收机状态暂时不可用');
-      return await response.json();
+      const status = await response.json(); metrics.server = status; return status;
     } finally { clearTimeout(timeout); }
   }
   function scheduleReconnect(message) {
+    metrics.reconnects++; metrics.lastReason = message;
     closeSockets(); if (!desired || document.hidden) return;
     const seconds = Math.min(10, 2 ** Math.min(retry++, 4));
     state(`${message} · ${seconds} 秒后重试`); notice('正在恢复连接，接收机请保持 Showcase 前台');
@@ -251,6 +295,7 @@
               config.avcc.length === next.avcc.length && config.avcc.every((v, i) => v === next.avcc[i])) return;
           resetPlayer(); config = next; player = makePlayer(config); requestKey();
         } else if (data[0] === 2 && data.length > 14 && config && view.getUint32(1) === config.generation) {
+          metrics.received++; metrics.bytes += data.length - 14;
           const micros = view.getUint32(6) * 4294967296 + view.getUint32(10);
           player.feed(data.subarray(14), data[5] === 1, micros); lastFrame = performance.now();
         }
@@ -323,7 +368,7 @@
       }
     } finally { statusBusy = false; }
   }, 1500);
-  $('reconnect').onclick = () => { desired = true; retry = 0; failureTimes = []; connect(); };
+  $('reconnect').onclick = () => { metrics.reconnects++; metrics.lastReason = '手动重连'; desired = true; retry = 0; failureTimes = []; connect(); };
   $('disconnect').onclick = () => {
     desired = false; closeSockets(); state('已断开，点重连恢复'); notice('已断开');
   };
@@ -332,6 +377,39 @@
     $('fit').textContent = fill ? '显示：填满' : '显示：等比';
   };
   $('menu').onclick = () => { const bar = $('toolbar'); bar.hidden = !bar.hidden; };
+  let rateAt = performance.now(), rateReceived = 0, ratePresented = 0, rateBytes = 0;
+  let rates = {receivedFps: 0, presentedFps: null, bitrateMbps: 0};
+  function diagnosticSnapshot() {
+    return {app: 'Showcase+', version: metrics.server?.version || '等待接收机', build: metrics.server?.build || '', entry: location.origin,
+      resolution: config ? `${config.width} × ${config.height}` : '等待视频', ...rates, presentationSignal: metrics.frameSignal,
+      ...player?.stats(), receivedFrames: metrics.received, recoveryCount: metrics.recoveries, reconnectCount: metrics.reconnects,
+      lastReason: metrics.lastReason, sourceFrameAgeMs: metrics.server?.frameAgeMs ?? null,
+      serverQueueBytes: metrics.server?.mediaQueueBytes ?? null, congestionRecoveries: metrics.server?.congestionRecoveries ?? null};
+  }
+  function renderDiagnostics() { if (!$('diagnostic-panel').hidden) $('diagnostic-data').textContent = JSON.stringify(diagnosticSnapshot(), null, 2); }
+  setInterval(() => {
+    const now = performance.now(), seconds = (now - rateAt) / 1000;
+    if (seconds <= 0) return;
+    rates = {receivedFps: +((metrics.received - rateReceived) / seconds).toFixed(1),
+      presentedFps: metrics.frameSignal === '不可用' ? null : +((metrics.presented - ratePresented) / seconds).toFixed(1),
+      bitrateMbps: +((metrics.bytes - rateBytes) * 8 / seconds / 1e6).toFixed(2)};
+    rateAt = now; rateReceived = metrics.received; ratePresented = metrics.presented; rateBytes = metrics.bytes;
+    renderDiagnostics();
+  }, 1000);
+  $('diagnostics').onclick = () => { $('diagnostic-panel').hidden = !$('diagnostic-panel').hidden; renderDiagnostics(); };
+  $('diagnostic-close').onclick = () => { $('diagnostic-panel').hidden = true; };
+  $('diagnostic-copy').onclick = async () => {
+    const text = JSON.stringify(diagnosticSnapshot(), null, 2);
+    try {
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text);
+      else {
+        const field = document.createElement('textarea'); field.value = text; field.style.cssText = 'position:fixed;left:-9999px';
+        document.body.appendChild(field); field.select();
+        try { if (!document.execCommand('copy')) throw Error('copy unavailable'); } finally { field.remove(); }
+      }
+      $('diagnostic-copy').textContent = '已复制';
+    } catch (_) { $('diagnostic-copy').textContent = '复制失败，可手动复制下方文字'; }
+  };
   $('fullscreen').onclick = () => {
     const action = document.fullscreenElement ? document.exitFullscreen?.() : document.documentElement.requestFullscreen?.();
     action?.catch(() => state('请使用车机浏览器菜单调整窗口'));

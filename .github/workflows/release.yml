@@ -100,7 +100,7 @@ jobs:
             build/browser-rootless/*.deb \
             build/browser-rootless/SHA256SUMS \
             build/browser-rootless/build-provenance.json \
-            docs/BROWSER5.md --clobber
+            docs/BROWSER5.md docs/PLAYBACK_DIAGNOSTICS.md --clobber
           gh release edit "$RELEASE_TAG" --draft=false --prerelease \
             --title "$app_name $RELEASE_TAG" \
             --notes-file docs/RELEASE_NOTES.md

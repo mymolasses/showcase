@@ -16,6 +16,7 @@
 #include <signal.h>
 #include <unistd.h>
 #include <errno.h>
+#include <pthread.h>
 #include "browser_network.h"
 #include "browser_settings.h"
 #include "browser_assets.h"
@@ -26,6 +27,13 @@
 static NSString *webDomain, *httpsMessage;
 static bool httpsReady;
 static uint16_t httpsPort = 443, backendPort = BROWSER_PORT;
+static double networkCheckedAt, networkCheckDuration;
+#ifndef SHOWCASE_RELEASE_VERSION
+#define SHOWCASE_RELEASE_VERSION "development"
+#endif
+#ifndef SHOWCASE_BUILD_NUMBER
+#define SHOWCASE_BUILD_NUMBER "development"
+#endif
 
 static volatile sig_atomic_t stopped;
 static void stop_signal(int value) { (void)value; stopped = 1; }
@@ -59,13 +67,17 @@ static int listener(uint16_t port) {
 @implementation SCProbeClient
 @end
 static NSDictionary *report(SCNetState *s, bool port80, uint16_t port, uint64_t requests, uint64_t tls) {
-    return @{@"version": @"Browser4", @"pid": @(getpid()), @"parentPid": @(getppid()),
+    return @{@"version": @SHOWCASE_RELEASE_VERSION, @"build": @SHOWCASE_BUILD_NUMBER, @"pid": @(getpid()), @"parentPid": @(getppid()),
         @"updated": @(NSDate.date.timeIntervalSince1970), @"localReady": @(s->ready),
         @"phase": [NSString stringWithUTF8String:s->phase], @"detail": [NSString stringWithUTF8String:s->detail],
         @"interface": [NSString stringWithUTF8String:s->primary.name], @"hotspotAddress": ip(s->primary.address),
         @"compatibilityAddress": @SC_COMPAT_IP, @"port80": @(port80), @"probePort": @(port),
         @"domain": webDomain ?: @"", @"httpsReady": @(httpsReady), @"httpsPort": @(httpsPort),
-        @"httpsStatus": httpsMessage ?: @"", @"probeRequests": @(requests), @"tlsOnHTTP": @(tls)};
+        @"httpsStatus": httpsMessage ?: @"", @"probeRequests": @(requests), @"tlsOnHTTP": @(tls),
+        @"consecutiveFailures": @(s->failures), @"retryInMs": @(MAX(0, s->retryAt - now()) * 1000),
+        @"aliasInterface": [NSString stringWithUTF8String:s->alias.name],
+        @"routeCheckAgeMs": @(networkCheckedAt ? (now()-networkCheckedAt)*1000 : -1),
+        @"routeCheckDurationMs": @(networkCheckDuration * 1000)};
 }
 static void reply(SCProbeClient *c, int code, NSString *mime, NSData *body) {
     NSString *header = [NSString stringWithFormat:@"HTTP/1.1 %d %@\r\nContent-Type: %@\r\nContent-Length: %lu\r\nCache-Control: no-store\r\nConnection: close\r\nX-Content-Type-Options: nosniff\r\nContent-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; media-src 'self' blob:; object-src 'none'; frame-ancestors 'none'\r\n\r\n",
@@ -131,10 +143,60 @@ static bool tick(int channel, SCNetState *state) {
     }
     return true;
 }
+/* The relay loop never waits on PF_ROUTE or the guard. One worker owns the
+ * guard channel and publishes small immutable snapshots under a short lock. */
+typedef struct {
+    pthread_mutex_t lock;
+    pthread_t thread;
+    int channel;
+    bool stopping, failed;
+    SCNetState state;
+    uint32_t requestedPeer, cachedPeer;
+    SCNetRoute peerRoute;
+    int routeError;
+    double routeAt, checkedAt, duration;
+    unsigned testDelayMs;
+} SCProbeMonitor;
+static void *monitor_loop(void *opaque) {
+    SCProbeMonitor *m = opaque; SCNetState state = {0};
+    for (;;) {
+        pthread_mutex_lock(&m->lock); bool stop = m->stopping; uint32_t peer = m->requestedPeer; pthread_mutex_unlock(&m->lock);
+        if (stop) break;
+        double started = now();
+#ifdef SC_PROBE_TEST
+        if (m->testDelayMs) usleep(m->testDelayMs * 1000);
+#endif
+        bool ok = tick(m->channel, &state);
+        SCNetRoute route = {0}; int error = peer && ok ? sc_network_route(peer, &route) : EAGAIN;
+        pthread_mutex_lock(&m->lock);
+        m->state = state; m->failed = !ok; m->checkedAt = now(); m->duration = now() - started;
+        if (peer) { m->cachedPeer = peer; m->peerRoute = route; m->routeError = error; m->routeAt = now(); }
+        stop = m->stopping; pthread_mutex_unlock(&m->lock);
+        if (!ok || stop) break;
+        // Interruptible sleep; stop never waits a whole retry interval.
+        for (int i = 0; i < 20; i++) {
+            usleep(50000); pthread_mutex_lock(&m->lock); stop = m->stopping; pthread_mutex_unlock(&m->lock);
+            if (stop) break;
+        }
+    }
+    return NULL;
+}
+static bool monitor_snapshot(SCProbeMonitor *m, SCNetState *state) {
+    pthread_mutex_lock(&m->lock);
+    *state = m->state; networkCheckedAt = m->checkedAt; networkCheckDuration = m->duration;
+    bool ok = !m->failed; pthread_mutex_unlock(&m->lock); return ok;
+}
+static bool monitor_peer_route(SCProbeMonitor *m, uint32_t peer, SCNetRoute *route, int *error) {
+    pthread_mutex_lock(&m->lock); m->requestedPeer = peer;
+    bool ready = peer == m->cachedPeer && m->routeAt && now() - m->routeAt < 5;
+    if (ready) { *route = m->peerRoute; *error = m->routeError; }
+    pthread_mutex_unlock(&m->lock); return ready;
+}
 int main(int argc, char **argv) { @autoreleasepool {
     setvbuf(stdout,NULL,_IOLBF,0); setvbuf(stderr,NULL,_IOLBF,0);
     pid_t parent=0; uint16_t port=BROWSER_PROBE_PORT, httpPort=80;
     NSString *statePath=BROWSER_PROBE_STATE;
+    unsigned testDelayMs = 0;
     for (int i=1;i<argc;i++) {
         if (!strcmp(argv[i],"--parent") && i+1<argc) parent=(pid_t)atoi(argv[++i]);
 #ifdef SC_PROBE_TEST
@@ -142,6 +204,7 @@ int main(int argc, char **argv) { @autoreleasepool {
         else if (!strcmp(argv[i],"--test-port") && i+1<argc) port=(uint16_t)atoi(argv[++i]);
         else if (!strcmp(argv[i],"--test-http-port") && i+1<argc) httpPort=(uint16_t)atoi(argv[++i]);
         else if (!strcmp(argv[i],"--test-https-port") && i+1<argc) httpsPort=(uint16_t)atoi(argv[++i]);
+        else if (!strcmp(argv[i],"--test-route-delay-ms") && i+1<argc) testDelayMs=MIN(1500, (unsigned)atoi(argv[++i]));
 #endif
         else { fprintf(stderr,"Unknown argument\n"); return 2; }
     }
@@ -171,6 +234,11 @@ int main(int argc, char **argv) { @autoreleasepool {
         SCNetOps ops=sc_network_darwin_ops(); int rc=sc_network_guard(channel[1],&ops); close(lock); _exit(rc);
     }
     close(channel[1]);
+    SCProbeMonitor monitor = {.lock = PTHREAD_MUTEX_INITIALIZER, .channel = channel[0], .testDelayMs = testDelayMs};
+    snprintf(monitor.state.phase, sizeof(monitor.state.phase), "checking");
+    snprintf(monitor.state.detail, sizeof(monitor.state.detail), "Background network check starting");
+    int threadError = pthread_create(&monitor.thread, NULL, monitor_loop, &monitor);
+    if (threadError) { close(channel[0]); waitpid(guard, NULL, 0); for(int i=0;i<3;i++) if(ports[i]>=0) close(ports[i]); close(lock); return 8; }
     NSData *configData=[NSData dataWithContentsOfFile:[directory stringByAppendingPathComponent:@"browser-web.json"]];
     id decoded=configData.length<=8192 && configData ? [NSJSONSerialization JSONObjectWithData:configData options:0 error:NULL] : nil;
     NSDictionary *configuration=[decoded isKindOfClass:NSDictionary.class] ? decoded : @{};
@@ -185,14 +253,14 @@ int main(int argc, char **argv) { @autoreleasepool {
         ports[2]=listener(httpsPort); httpsReady=ports[2]>=0;
         if(!httpsReady) httpsMessage=@"证书有效，但 HTTPS 端口被占用，未启用 HTTPS";
     }
-    fprintf(stderr,"[TESLA-NET] Browser4 domain=%s HTTP=%s HTTPS=%s\n",webDomain.UTF8String,ports[1]>=0 ? "standard+fallback" : "fallback",httpsReady ? "ready" : "not configured");
+    fprintf(stderr,"[TESLA-NET] Showcase+ %s build=%s domain=%s HTTP=%s HTTPS=%s\n",SHOWCASE_RELEASE_VERSION,SHOWCASE_BUILD_NUMBER,webDomain.UTF8String,ports[1]>=0 ? "standard+fallback" : "fallback",httpsReady ? "ready" : "not configured");
     SCNetState state={0}; bool port80=ports[1]>=0;
     NSMutableArray<SCProbeClient*> *clients=[NSMutableArray array];
     uint64_t requests=0,tls=0; double nextTick=0;
     while(!stopped && getppid()==parent) { @autoreleasepool {
         if(now()>=nextTick) {
             char previous[sizeof(state.detail)]; snprintf(previous,sizeof(previous),"%s",state.detail);
-            if(!tick(channel[0],&state)) { fprintf(stderr,"[TESLA-NET] guard channel failed\n"); break; }
+            if(!monitor_snapshot(&monitor,&state)) { fprintf(stderr,"[TESLA-NET] guard channel failed\n"); break; }
             if(strcmp(previous,state.detail)) fprintf(stderr,"[TESLA-NET] phase=%s interface=%s detail=%s\n",state.phase,state.primary.name,state.detail);
             NSData *json=[NSJSONSerialization dataWithJSONObject:report(&state,port80,port,requests,tls) options:NSJSONWritingPrettyPrinted error:NULL];
             [json writeToFile:statePath options:NSDataWritingAtomic error:NULL]; chmod(statePath.fileSystemRepresentation,0644); nextTick=now()+1;
@@ -270,9 +338,11 @@ int main(int argc, char **argv) { @autoreleasepool {
                         reply(c,200,script ? @"application/javascript" : @"text/html; charset=utf-8",[NSData dataWithBytes:asset length:strlen(asset)]);
                     } else if([path isEqual:@"/probe.json"]) {
                         requests++; NSMutableDictionary *data=[report(&state,port80,port,requests,tls) mutableCopy];
-                        SCNetRoute route={0}; int error=sc_network_route(c.peer,&route); char name[IFNAMSIZ]="";
-                        if(!error) if_indextoname(route.index,name);
-                        data[@"returnInterface"]=[NSString stringWithUTF8String:name]; data[@"returnViaHotspot"]=@(!error && state.primary.index && route.index==state.primary.index);
+                        SCNetRoute route={0}; int error=EAGAIN; char name[IFNAMSIZ]="";
+                        bool ready=monitor_peer_route(&monitor,c.peer,&route,&error);
+                        if(ready && !error) if_indextoname(route.index,name);
+                        data[@"returnRoutePending"]=@(!ready);
+                        data[@"returnInterface"]=[NSString stringWithUTF8String:name]; data[@"returnViaHotspot"]=@(ready && !error && state.primary.index && route.index==state.primary.index);
                         reply(c,200,@"application/json",[NSJSONSerialization dataWithJSONObject:data options:0 error:NULL]);
                     } else if([path isEqual:@"/status"] || [path isEqual:@"/media"] || [path isEqual:@"/control"]) {
                         bool ws=![path isEqual:@"/status"];
@@ -318,6 +388,8 @@ int main(int argc, char **argv) { @autoreleasepool {
     } }
     for(SCProbeClient *c in clients) { close(c.fd); if(c.backend>=0) close(c.backend); }
     for(int i=0;i<3;i++) if(ports[i]>=0) close(ports[i]);
+    pthread_mutex_lock(&monitor.lock); monitor.stopping=true; pthread_mutex_unlock(&monitor.lock);
+    shutdown(channel[0], SHUT_RDWR); pthread_join(monitor.thread, NULL); pthread_mutex_destroy(&monitor.lock);
     close(channel[0]); int status=-1; while(waitpid(guard,&status,0)<0 && errno==EINTR) {}
     state.ready=false; httpsReady=false; snprintf(state.phase,sizeof(state.phase),"%s",WIFEXITED(status) && WEXITSTATUS(status)==0 ? "stopped" : "cleanup_failed");
     snprintf(state.detail,sizeof(state.detail),"%s","Web entry stopped; inspect network-probe.log if cleanup failed");

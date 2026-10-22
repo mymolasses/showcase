@@ -152,7 +152,8 @@ def main():
     with tempfile.TemporaryDirectory(prefix='showcase-rootless-build-') as directory:
         work = Path(directory)
         flags = ['xcrun', '--sdk', 'iphoneos', 'clang', '-target', 'arm64-apple-ios16.2',
-                 '-fobjc-arc', '-DSHOWCASE_ROOTLESS=1', '-O2', '-Wno-deprecated-declarations']
+                 '-fobjc-arc', '-DSHOWCASE_ROOTLESS=1', '-O2', '-Wno-deprecated-declarations',
+                 '-DSHOWCASE_RELEASE_VERSION="' + VERSION + '"', '-DSHOWCASE_BUILD_NUMBER="' + BUILD_NUMBER + '"']
         ui = work / 'Showcase'
         service = work / 'CarPlay Simulator'
         probe = work / 'ShowcaseNet'
@@ -219,6 +220,7 @@ def main():
     replace(payload, 'var/jb/usr/share/showcase/BROWSER.md', (ROOT / 'docs/BROWSER.md').read_bytes(), 0o644)
     replace(payload, 'var/jb/usr/share/showcase/TEST_TESLA_BROWSER4.md', (ROOT / 'docs/TEST_TESLA_BROWSER4.md').read_bytes(), 0o644)
     replace(payload, 'var/jb/usr/share/showcase/BROWSER5.md', (ROOT / 'docs/BROWSER5.md').read_bytes(), 0o644)
+    replace(payload, 'var/jb/usr/share/showcase/PLAYBACK_DIAGNOSTICS.md', (ROOT / 'docs/PLAYBACK_DIAGNOSTICS.md').read_bytes(), 0o644)
     md5 = ''.join(hashlib.md5(data).hexdigest() + '  ' + name + '\n'
                   for name, (member, data) in sorted(payload.items()) if member.isfile())
     replace(control, 'md5sums', md5.encode(), 0o644)
