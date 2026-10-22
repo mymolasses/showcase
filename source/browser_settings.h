@@ -6,6 +6,7 @@
 #include <arpa/inet.h>
 
 #define BROWSER_OUTPUT_KEY @"browserOutputEnabled"
+#define BROWSER_QUALITY_KEY @"browserResolutionHeight"
 #define BROWSER_TOKEN_PATH @"/var/mobile/Library/Showcase/browser-token"
 #define BROWSER_PORT 8080
 
@@ -14,16 +15,13 @@ static NSString *showcase_browser_token(BOOL create) {
     NSString *token = [[NSString stringWithContentsOfFile:BROWSER_TOKEN_PATH
         encoding:NSUTF8StringEncoding error:NULL]
         stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
-    NSCharacterSet *hex = [NSCharacterSet characterSetWithCharactersInString:@"0123456789abcdef"];
-    if (token.length == 32 && [token rangeOfCharacterFromSet:hex.invertedSet].location == NSNotFound) {
+    NSCharacterSet *digits = [NSCharacterSet characterSetWithCharactersInString:@"0123456789"];
+    if (token.length == 4 && [token rangeOfCharacterFromSet:digits.invertedSet].location == NSNotFound) {
         chmod(BROWSER_TOKEN_PATH.fileSystemRepresentation, 0600);
         return token;
     }
     if (!create) return nil;
-    uint8_t random[16];
-    arc4random_buf(random, sizeof(random));
-    NSMutableString *value = [NSMutableString string];
-    for (size_t i = 0; i < sizeof(random); i++) [value appendFormat:@"%02x", random[i]];
+    NSString *value = [NSString stringWithFormat:@"%04u", arc4random_uniform(10000)];
     [[NSFileManager defaultManager] createDirectoryAtPath:BROWSER_TOKEN_PATH.stringByDeletingLastPathComponent
         withIntermediateDirectories:YES attributes:@{NSFilePosixPermissions: @0700} error:NULL];
     NSData *bytes = [value dataUsingEncoding:NSUTF8StringEncoding];

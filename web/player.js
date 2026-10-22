@@ -77,18 +77,45 @@
     module.exports = {join, integer, box, initMp4, fragment, mapPoint, checkFrame}; return;
   }
   const $ = id => document.getElementById(id);
-  const video = document.querySelector('video'), surface = $('surface');
+  const video = document.querySelector('video'), surface = $('surface'), poster = $('poster');
   let token = '', media = null, control = null, reconnectTimer = null, desired = false, epoch = 0;
   let config = null, player = null, pointer = null, displayed = false;
-  let statusBusy = false, active = false, lastFrame = 0;
+  let statusBusy = false, active = false, lastFrame = 0, lastKeyRequest = 0, retry = 0, failureTimes = [];
   const state = message => { $('state').textContent = message; };
   const notice = message => { $('notice').textContent = message; $('notice').hidden = !message; };
   const send = object => { if (control?.readyState !== WebSocket.OPEN) return false; control.send(JSON.stringify(object)); return true; };
+  function requestKey() {
+    const now = performance.now();
+    if (now - lastKeyRequest >= 2000 && send({type: 'keyframe'})) lastKeyRequest = now;
+  }
   function release() {
     if (pointer !== null) { send({type: 'release'}); pointer = null; }
   }
-  function resetPlayer() {
-    release(); player?.close(); player = null; config = null; displayed = false;
+  function snapshot() {
+    if (video.readyState < 2 || !video.videoWidth) return;
+    try {
+      poster.width = video.videoWidth; poster.height = video.videoHeight;
+      poster.getContext('2d').drawImage(video, 0, 0); poster.hidden = false;
+    } catch (_) { /* A frame may disappear during decoder teardown. */ }
+  }
+  function resetPlayer(keep = true) {
+    release(); if (keep) snapshot();
+    player?.close(); player = null; config = null; displayed = false;
+    if (!keep) poster.hidden = true;
+  }
+  function stop(message) {
+    desired = false; closeSockets(); state(message); notice(message);
+  }
+  function recover(message) {
+    const now = performance.now(); failureTimes = failureTimes.filter(t => now - t < 30000);
+    if (!desired) return;
+    if (failureTimes.length >= 3) { stop(message + '；请尝试降低接收机网页分辨率后重启 CarPlay'); return; }
+    failureTimes.push(now);
+    const info = config; resetPlayer(); notice('正在恢复视频：' + message);
+    if (info && media?.readyState === WebSocket.OPEN) {
+      config = info;
+      try { player = makePlayer(info); requestKey(); } catch (error) { stop(error.message); }
+    }
   }
   function makePlayer(info) {
     const Source = window.MediaSource;
@@ -96,17 +123,26 @@
     const mime = `video/mp4; codecs="${codec}"`;
     if (!Source || !Source.isTypeSupported(mime)) throw Error('车机不支持此 H.264 MSE 格式');
     const source = new Source(), url = URL.createObjectURL(source);
-    let buffer = null, closed = false, queue = [], queued = 0, waitingKey = true;
-    let previous = null, base = 0, sequence = 0, lastKey = 0;
-    const fail = message => { if (!closed) { notice(message); state('播放失败，请重连'); release(); } };
+    let buffer = null, closed = false, queue = [], queued = 0, waitingKey = true, failed = false;
+    let previous = null, cursor = 0, sequence = 0, lastMicros = null, lastKey = 0, flushTimer = null;
+    const fail = message => {
+      if (!closed && !failed) { failed = true; setTimeout(() => { if (!closed) recover(message); }, 300); }
+    };
     const pump = () => {
-      if (closed || !buffer || buffer.updating || !queue.length) return;
+      if (closed || failed || !buffer || buffer.updating || !queue.length) return;
       const next = queue.shift(); queued -= next.length;
-      try { buffer.appendBuffer(next); } catch (_) { fail('视频缓冲错误，请重连'); }
+      try { buffer.appendBuffer(next); } catch (_) { fail('视频缓冲积压'); }
     };
     const append = bytes => {
-      if (queue.length >= 16 || queued + bytes.length > 2 * 1024 * 1024) throw Error('播放队列积压，请重连');
+      if (queue.length >= 90 || queued + bytes.length > 8 * 1024 * 1024) { fail('热点传输或解码速度不足'); return; }
       queue.push(bytes); queued += bytes.length; pump();
+    };
+    // Flush the final sample even when the sender stops at a static screen.
+    // Long idle gaps are compacted; they are not a broken CarPlay session.
+    const flush = duration => {
+      if (!previous) return;
+      append(fragment(++sequence, previous.bytes, previous.key, cursor, duration));
+      cursor += duration; previous = null;
     };
     video.src = url;
     source.addEventListener('sourceopen', () => {
@@ -114,51 +150,77 @@
       URL.revokeObjectURL(url);
       try {
         buffer = source.addSourceBuffer(mime);
-        buffer.addEventListener('updateend', () => { pump(); video.play().catch(() => notice('请点重连以允许播放')); });
-        buffer.addEventListener('error', () => fail('车机视频解码失败，请重连'));
+        buffer.addEventListener('updateend', () => {
+          if (closed) return; pump(); video.play().catch(() => { if (!closed) notice('请点重连以允许播放'); });
+        });
+        buffer.addEventListener('error', () => fail('视频解码失败'));
         const init = initMp4(info.avcc, info.width, info.height);
         queue.unshift(init); queued += init.length; pump();
-      } catch (_) { fail('无法建立车机视频缓冲'); }
+      } catch (_) { fail('无法建立视频缓冲'); }
     }, {once: true});
     const timer = setInterval(() => {
-      if (closed || !buffer || !video.buffered.length) return;
+      if (closed || failed || !buffer || !video.buffered.length) return;
       const end = video.buffered.end(video.buffered.length - 1), lag = end - video.currentTime;
-      if (lag > 0.8) video.currentTime = Math.max(video.buffered.start(0), end - 0.12);
-      video.playbackRate = lag > 0.25 ? 1.1 : 1;
-      if (!buffer.updating && !queue.length && lastKey > 1 && lastKey < video.currentTime)
-        try { buffer.remove(0, lastKey); } catch (_) { /* next tick */ }
+      if (lag > 0.65) video.currentTime = Math.max(video.buffered.start(0), end - 0.15);
+      video.playbackRate = lag > 0.3 ? 1.08 : 1;
+      const trim = Math.min(lastKey, video.currentTime - 8);
+      if (!buffer.updating && !queue.length && trim > video.buffered.start(0) + 2)
+        try { buffer.remove(0, trim); } catch (_) { /* next tick */ }
     }, 250);
     return {
       feed(bytes, key, micros) {
-        if (closed || waitingKey && !key) return;
+        if (closed || failed || waitingKey && !key) return;
         const actualKey = checkFrame(bytes);
         if (key && !actualKey) throw Error('Invalid keyframe');
-        if (waitingKey) { waitingKey = false; base = micros; }
-        const time = Math.round((micros - base) * 0.09);
-        if (!Number.isSafeInteger(time) || time < 0) throw Error('Invalid frame timestamp');
-        if (previous) {
-          const duration = time - previous.time;
-          if (duration <= 0 || duration > 90000) throw Error('视频时间轴中断，请重连');
-          append(fragment(++sequence, previous.bytes, previous.key, previous.time, duration));
-        }
-        if (key) lastKey = time / 90000;
-        previous = {bytes: bytes.slice(), key, time};
+        if (!Number.isSafeInteger(micros) || micros < 0) throw Error('Invalid frame timestamp');
+        if (lastMicros !== null && micros <= lastMicros) return;
+        const delta = lastMicros === null ? 3000 : Math.round((micros - lastMicros) * 0.09);
+        clearTimeout(flushTimer);
+        flush(delta > 0 && delta <= 22500 ? delta : 3000);
+        waitingKey = false; lastMicros = micros;
+        if (key) lastKey = cursor / 90000;
+        previous = {bytes: bytes.slice(), key};
+        flushTimer = setTimeout(() => { if (!closed) flush(3000); }, 80);
       },
       close() {
-        closed = true; clearInterval(timer); URL.revokeObjectURL(url); queue = [];
+        closed = true; clearInterval(timer); clearTimeout(flushTimer); URL.revokeObjectURL(url); queue = [];
         video.removeAttribute('src'); video.load(); video.playbackRate = 1;
       }
     };
   }
-  function connect() {
+  async function readStatus() {
+    const abort = new AbortController(), timeout = setTimeout(() => abort.abort(), 4000);
+    try {
+      const response = await fetch('/status', {headers: {'X-Showcase-Token': token}, cache: 'no-store', signal: abort.signal});
+      if (response.status === 403) throw Object.assign(Error('四位配对码不正确，请点断开后重新输入'), {permanent: true});
+      if (response.status === 429) throw Object.assign(Error('配对尝试过多，请等 30 秒后重连'), {permanent: true});
+      if (!response.ok) throw Error('接收机状态暂时不可用');
+      return await response.json();
+    } finally { clearTimeout(timeout); }
+  }
+  function scheduleReconnect(message) {
+    closeSockets(); if (!desired || document.hidden) return;
+    const seconds = Math.min(10, 2 ** Math.min(retry++, 4));
+    state(`${message} · ${seconds} 秒后重试`); notice('正在恢复连接，接收机请保持 Showcase 前台');
+    reconnectTimer = setTimeout(connect, seconds * 1000);
+  }
+  async function connect() {
     closeSockets(); if (!desired || document.hidden) return;
     const current = ++epoch;
-    notice('等待 CarPlay 画面…'); state('正在连接');
-    const endpoint = 'ws://' + location.host;
-    const protocol = 'showcase.' + token;
+    state('正在连接'); notice('等待 CarPlay 画面…');
+    try {
+      const status = await readStatus(); if (current !== epoch) return;
+      if (status.viewers || status.controllers) { scheduleReconnect('其他页面仍占用连接，请关闭'); return; }
+      active = status.active && status.configured;
+    } catch (error) {
+      if (current !== epoch) return;
+      if (error.permanent) stop(error.message); else scheduleReconnect('接收机暂时不可达');
+      return;
+    }
+    const endpoint = 'ws://' + location.host, protocol = 'showcase.' + token;
     control = new WebSocket(endpoint + '/control', protocol);
     media = new WebSocket(endpoint + '/media', protocol); media.binaryType = 'arraybuffer';
-    control.onopen = () => { if (current === epoch) send({type: 'keyframe'}); };
+    control.onopen = () => { if (current === epoch) { lastKeyRequest = -Infinity; requestKey(); } };
     media.onmessage = event => {
       if (current !== epoch || !(event.data instanceof ArrayBuffer)) return;
       try {
@@ -166,32 +228,32 @@
         if (data[0] === 3) { resetPlayer(); notice('等待新的 CarPlay 会话…'); return; }
         if (data[0] === 1) {
           if (data.length < 16) throw Error('Invalid configuration');
-          resetPlayer(); config = {generation: view.getUint32(1), width: view.getUint16(5), height: view.getUint16(7), avcc: data.slice(9)};
-          player = makePlayer(config); send({type: 'keyframe'});
+          const next = {generation: view.getUint32(1), width: view.getUint16(5), height: view.getUint16(7), avcc: data.slice(9)};
+          if (config && config.generation === next.generation && config.width === next.width && config.height === next.height &&
+              config.avcc.length === next.avcc.length && config.avcc.every((v, i) => v === next.avcc[i])) return;
+          resetPlayer(); config = next; player = makePlayer(config); requestKey();
         } else if (data[0] === 2 && data.length > 14 && config && view.getUint32(1) === config.generation) {
           const micros = view.getUint32(6) * 4294967296 + view.getUint32(10);
           player.feed(data.subarray(14), data[5] === 1, micros); lastFrame = performance.now();
         }
-      } catch (error) {
-        resetPlayer(); notice(error.message); state('播放失败，请重连');
-        /* Stop media backpressure; keep explicit user reconnect available. */
-        desired = false; closeSockets();
-      }
+      } catch (error) { stop(error.message); }
     };
-    const disconnected = () => {
-      if (current !== epoch) return;
-      closeSockets(); state('连接断开或配对失败'); notice('请检查配对码，并保持接收机 Showcase 在前台');
-      if (desired && !document.hidden) reconnectTimer = setTimeout(connect, 2000);
+    const disconnected = event => {
+      if (current === epoch) scheduleReconnect(`连接中断 (${event.code})`);
     };
     media.onclose = disconnected; control.onclose = disconnected;
     media.onerror = control.onerror = () => {};
   }
   function closeSockets() {
     clearTimeout(reconnectTimer); reconnectTimer = null; release(); ++epoch;
-    for (const socket of [media, control]) if (socket) { socket.onclose = null; socket.close(); }
+    for (const socket of [media, control]) if (socket) { socket.onclose = socket.onmessage = null; socket.close(); }
     media = control = null; resetPlayer(); active = false;
   }
-  video.addEventListener('playing', () => { displayed = true; notice(''); state('CarPlay · 单指触控'); });
+  video.addEventListener('playing', () => {
+    displayed = true; poster.hidden = true; retry = 0; notice('');
+    state(`CarPlay · ${config?.width || video.videoWidth} × ${config?.height || video.videoHeight} · 单指触控`);
+  });
+  video.addEventListener('error', () => { if (player) recover('视频播放错误'); });
   function point(event, clamp) {
     return config && mapPoint(surface.getBoundingClientRect(), config.width, config.height, event.clientX, event.clientY, clamp);
   }
@@ -223,31 +285,35 @@
   setInterval(() => {
     send({type: 'ping'});
     if (media?.readyState === WebSocket.OPEN) media.send('{"type":"ping"}');
-    if (desired && config && performance.now() - lastFrame > 2000) { release(); notice('等待视频恢复…'); send({type: 'keyframe'}); }
+    // Static screens are normal. Request an occasional IDR, without clearing
+    // the existing frame, disabling input or hammering the sender every 2 s.
+    if (desired && config && performance.now() - lastFrame > 10000 && performance.now() - lastKeyRequest > 10000) requestKey();
   }, 2000);
   setInterval(async () => {
-    if (!desired || document.hidden || statusBusy) return;
+    if (!desired || document.hidden || statusBusy || media?.readyState !== WebSocket.OPEN) return;
     statusBusy = true; const current = epoch;
-    const abort = new AbortController(), timeout = setTimeout(() => abort.abort(), 3000);
     try {
-      const response = await fetch('/status', {headers: {'X-Showcase-Token': token}, cache: 'no-store', signal: abort.signal});
-      if (!response.ok) throw Error('Pairing rejected');
-      const status = await response.json(); if (current !== epoch) return;
+      const status = await readStatus(); if (current !== epoch) return;
       active = status.active && status.configured;
       if (!active) { release(); notice('保持 Showcase 在前台，并连接发送 iPhone'); }
       else if (displayed) notice('');
-    } catch (_) { if (current === epoch) { active = false; release(); state('无法读取接收机状态'); } }
-    finally { clearTimeout(timeout); statusBusy = false; }
-  }, 1000);
+    } catch (error) {
+      if (current === epoch) {
+        active = false; release();
+        if (error.permanent) stop(error.message); else state('正在确认接收机状态');
+      }
+    } finally { statusBusy = false; }
+  }, 1500);
   $('pair').onsubmit = event => {
-    event.preventDefault(); const value = $('token').value.trim().toLowerCase();
-    if (!/^[0-9a-f]{32}$/.test(value)) { state('配对码应为 32 位十六进制字符'); return; }
+    event.preventDefault(); const value = $('token').value.trim();
+    if (!/^[0-9]{4}$/.test(value)) { state('请输入四位数字配对码'); return; }
     token = value; $('pair').hidden = true; surface.hidden = false;
-    $('reconnect').hidden = $('disconnect').hidden = false; desired = true; connect();
+    $('reconnect').hidden = $('disconnect').hidden = false;
+    desired = true; retry = 0; failureTimes = []; lastKeyRequest = -Infinity; connect();
   };
-  $('reconnect').onclick = () => { desired = true; connect(); };
+  $('reconnect').onclick = () => { desired = true; retry = 0; failureTimes = []; connect(); };
   $('disconnect').onclick = () => {
-    desired = false; closeSockets(); token = ''; $('token').value = '';
+    desired = false; closeSockets(); token = ''; $('token').value = ''; poster.hidden = true;
     surface.hidden = true; $('pair').hidden = false; $('reconnect').hidden = $('disconnect').hidden = true; state('未连接');
   };
   $('fullscreen').onclick = () => {

@@ -25,7 +25,7 @@ UPSTREAM_SHA256 = 'f91ab0bf7ddf94d9eb1eacc56db37e8943ea8f1dce60c4976f793d679707a
 UPSTREAM_URL = ('https://github.com/amineross/showcase/releases/download/v1.0-beta5-2/'
                 'com.rostane.showcase_1.0.beta5-2_iphoneos-arm64.deb')
 APP = 'var/jb/Applications/Showcase.app/'
-VERSION = '1.0~beta5-2+browser1'
+VERSION = '1.0~beta5-2+browser2'
 NAME = 'com.rostane.showcase_' + VERSION + '_iphoneos-arm64.deb'
 
 
@@ -144,7 +144,7 @@ def main():
                  '-fobjc-arc', '-DSHOWCASE_ROOTLESS=1', '-O2', '-Wno-deprecated-declarations']
         ui = work / 'Showcase'
         service = work / 'CarPlay Simulator'
-        run(flags + ['-DAPP_VERSION="1.0 Beta 5-2 Browser 1"', '-DPACKAGE_VERSION="' + VERSION + '"',
+        run(flags + ['-DAPP_VERSION="1.0 Beta 5-2 Browser 2"', '-DPACKAGE_VERSION="' + VERSION + '"',
                      'source/Showcase.m', '-framework', 'UIKit', '-framework', 'AVFoundation',
                      '-framework', 'AudioToolbox', '-framework', 'CoreMedia', '-framework', 'Foundation',
                      '-framework', 'Security', '-Wl,-undefined,dynamic_lookup', '-o', str(ui)])
@@ -168,7 +168,7 @@ def main():
         replace(payload, APP + 'CarPlay Simulator', service.read_bytes(), 0o4755)
     info = plistlib.loads(payload[APP + 'Info.plist'][1])
     info.update(CFBundleDisplayName='Showcase Browser', CFBundleShortVersionString='1.0',
-                CFBundleVersion='1.0.501', MinimumOSVersion='16.2')
+                CFBundleVersion='1.0.502', MinimumOSVersion='16.2')
     replace(payload, APP + 'Info.plist', plistlib.dumps(info), 0o644)
     # Retain upstream package ID and postinst signing for a normal upgrade over
     # Showcase; a second package would collide with its BTstack paths/socket.

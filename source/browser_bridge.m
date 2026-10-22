@@ -6,6 +6,7 @@
 #import <CommonCrypto/CommonDigest.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <arpa/inet.h>
 #include <ifaddrs.h>
 #include <poll.h>
@@ -19,7 +20,7 @@
 #include "browser_assets.h"
 
 #define MAX_CLIENTS 8
-#define MAX_QUEUE_BYTES (2 * 1024 * 1024)
+#define MAX_QUEUE_BYTES (8 * 1024 * 1024)
 #define MAX_FRAME_BYTES (4 * 1024 * 1024)
 
 @interface SCBrowserClient : NSObject
@@ -52,6 +53,10 @@ static bool haveTime;
 static double lastFrameAt, lastKeyAt;
 static NSString *pairToken;
 static NSData *configuration;
+static NSData *decoderConfiguration;
+static unsigned authFailures;
+static double authWindow;
+static uint64_t congestionRecoveries;
 static NSMutableArray<SCBrowserClient *> *clients;
 static ShowcaseBrowserTouch touchCallback;
 static ShowcaseBrowserResync resyncCallback;
@@ -103,6 +108,8 @@ static void invalidate_stream(void) {
 }
 static void drop_client(SCBrowserClient *c) {
     release_touch(c);
+    if (c.role == 1 || c.role == 2)
+        fprintf(stderr, "[BROWSER] %s disconnected; queue=%zu bytes\n", c.role == 1 ? "media" : "control", c.queued);
     close(c.fd); [clients removeObject:c];
 }
 static void http_reply(SCBrowserClient *c, int code, NSString *mime, NSData *body) {
@@ -161,16 +168,38 @@ static void handle_http(SCBrowserClient *c) {
         http_reply(c, 200, [path isEqual:@"/"] ? @"text/html; charset=utf-8" : @"application/javascript",
             [NSData dataWithBytes:asset length:strlen(asset)]); return;
     }
-    if ([path isEqual:@"/status"] && secret_equal(headers[@"x-showcase-token"], pairToken)) {
+    int role = [path isEqual:@"/media"] ? 1 : [path isEqual:@"/control"] ? 2 : 0;
+    if ([path isEqual:@"/status"] || role) {
+        double now = browser_now();
+        if (now - authWindow >= 30) { authWindow = now; authFailures = 0; }
+        if (authFailures >= 5) {
+            http_reply(c, 429, @"text/plain", [@"Too many attempts; wait 30 seconds" dataUsingEncoding:NSUTF8StringEncoding]);
+            return;
+        }
+        NSString *supplied = role ? headers[@"sec-websocket-protocol"] : headers[@"x-showcase-token"];
+        NSString *expected = role ? [@"showcase." stringByAppendingString:pairToken] : pairToken;
+        if (!secret_equal(supplied, expected)) {
+            authFailures++;
+            http_reply(c, 403, @"text/plain", [@"Pairing required" dataUsingEncoding:NSUTF8StringEncoding]);
+            return;
+        }
+    }
+    if ([path isEqual:@"/status"]) {
+        unsigned viewers = 0, controllers = 0; size_t queued = 0;
+        for (SCBrowserClient *other in clients) {
+            if (other.role == 1) { viewers++; queued += other.queued; }
+            if (other.role == 2) controllers++;
+        }
         NSDictionary *state = @{@"active": @(active), @"configured": @(configuration != nil),
             @"width": @(videoWidth), @"height": @(videoHeight), @"generation": @(generation),
+            @"version": @"Browser2", @"viewers": @(viewers), @"controllers": @(controllers),
+            @"mediaQueueBytes": @(queued), @"congestionRecoveries": @(congestionRecoveries),
             @"frameAgeMs": @(lastFrameAt ? (browser_now() - lastFrameAt) * 1000 : -1)};
         http_reply(c, 200, @"application/json", [NSJSONSerialization dataWithJSONObject:state options:0 error:NULL]); return;
     }
     NSString *protocol = [@"showcase." stringByAppendingString:pairToken];
     NSString *origin = [@"http://" stringByAppendingString:headers[@"host"]];
     NSData *key = [[NSData alloc] initWithBase64EncodedString:headers[@"sec-websocket-key"] ?: @"" options:0];
-    int role = [path isEqual:@"/media"] ? 1 : [path isEqual:@"/control"] ? 2 : 0;
     NSString *connection = [headers[@"connection"] lowercaseString];
     NSArray *connectionTokens = [connection componentsSeparatedByString:@","];
     bool upgrade = false;
@@ -192,6 +221,7 @@ static void handle_http(SCBrowserClient *c) {
     enqueue(c, [reply dataUsingEncoding:NSUTF8StringEncoding]);
     c.upgradePending = true;
     c.role = role; c.needsKey = true;
+    fprintf(stderr, "[BROWSER] %s connected\n", role == 1 ? "media" : "control");
     if (role == 2 && touchCallback) touchCallback(3, 0, 0, 0, browser_nanos());
     if (role == 1 && configuration) { enqueue(c, configuration); wantKey = true; }
     /* HTTP pipelining and WS payload before upgrade are not supported. */
@@ -278,6 +308,7 @@ static void *browser_loop(void *unused) {
                 else {
                     fcntl(fd, F_SETFL, O_NONBLOCK);
                     int yes = 1; setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &yes, sizeof(yes));
+                    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(yes));
                     SCBrowserClient *c = [SCBrowserClient new]; c.fd = fd; c.heard = browser_now();
                     c.input = [NSMutableData data]; c.output = [NSMutableArray array]; [clients addObject:c];
                 }
@@ -299,21 +330,28 @@ static void *browser_loop(void *unused) {
                 }
             }
             if (![clients containsObject:c]) continue;
-            if (events & POLLOUT && c.output.count) {
+            /* Drain a bounded burst, rather than just 64 KiB per poll. HD IDRs
+             * can span several packets; retaining framing is essential. */
+            size_t budget = 512 * 1024;
+            while (events & POLLOUT && c.output.count && budget) {
                 NSData *packet = c.output[0];
                 size_t available = packet.length - c.offset;
-                ssize_t n = send(c.fd, (const uint8_t *)packet.bytes + c.offset, MIN(available, 65536), 0);
-                if (n < 0 && errno != EAGAIN && errno != EINTR) { drop_client(c); continue; }
+                ssize_t n = send(c.fd, (const uint8_t *)packet.bytes + c.offset, MIN(available, budget), 0);
+                if (n <= 0) {
+                    if (n < 0 && errno != EAGAIN && errno != EINTR) drop_client(c);
+                    break;
+                }
                 if (n > 0) {
-                    c.offset += (size_t)n;
+                    c.offset += (size_t)n; budget -= (size_t)n;
                     if (c.offset == packet.length) { c.queued -= packet.length; [c.output removeObjectAtIndex:0]; c.offset = 0; c.upgradePending = false; }
                 }
             }
+            if (![clients containsObject:c]) continue;
             double now = browser_now();
             if (c.pressed && now - c.touched > 0.75) release_touch(c);
-            if ((c.role == 3 && c.output.count == 0) || now - c.heard > ((c.role == 0 || c.role == 3) ? 5 : 8)) drop_client(c);
+            if ((c.role == 3 && c.output.count == 0) || now - c.heard > ((c.role == 0 || c.role == 3) ? 5 : 20)) drop_client(c);
         }
-        bool request = wantKey && active && browser_now() - lastKeyAt >= 0.5;
+        bool request = wantKey && active && browser_now() - lastKeyAt >= 2;
         if (request) { wantKey = false; lastKeyAt = browser_now(); }
         pthread_mutex_unlock(&browserLock);
         if (request && resyncCallback) resyncCallback();
@@ -323,7 +361,7 @@ static void *browser_loop(void *unused) {
 
 bool showcase_browser_start(uint16_t port, const char *token, ShowcaseBrowserTouch touch,
                             ShowcaseBrowserResync resync) {
-    if (!port || !token || strlen(token) != 32) return false;
+    if (!port || !token || strlen(token) != 4 || strspn(token, "0123456789") != 4) return false;
     pthread_mutex_lock(&browserLock);
     if (running) { pthread_mutex_unlock(&browserLock); return false; }
     listener = socket(AF_INET, SOCK_STREAM, 0);
@@ -338,6 +376,8 @@ bool showcase_browser_start(uint16_t port, const char *token, ShowcaseBrowserTou
     listenPort = port; pairToken = [NSString stringWithUTF8String:token];
     touchCallback = touch; resyncCallback = resync;
     clients = [NSMutableArray array]; active = true; running = true;
+    authFailures = 0; authWindow = browser_now(); congestionRecoveries = 0;
+    decoderConfiguration = nil;
     invalidate_stream();
     int error = pthread_create(&browserThread, NULL, browser_loop, NULL);
     if (error) { running = false; close(listener); listener = -1; }
@@ -352,7 +392,7 @@ void showcase_browser_stop(void) {
     pthread_join(browserThread, NULL);
     pthread_mutex_lock(&browserLock);
     for (SCBrowserClient *c in [clients copy]) drop_client(c);
-    close(listener); listener = -1; clients = nil; configuration = nil; pairToken = nil;
+    close(listener); listener = -1; clients = nil; configuration = nil; decoderConfiguration = nil; pairToken = nil;
     pthread_mutex_unlock(&browserLock);
 }
 void showcase_browser_set_active(bool value) {
@@ -384,7 +424,15 @@ static bool valid_avcc(const uint8_t *bytes, size_t length) {
 void showcase_browser_config(uint16_t width, uint16_t height, const uint8_t *avcc, size_t length) {
     if (!width || !height || width > 4096 || height > 4096 || !valid_avcc(avcc, length)) return;
     pthread_mutex_lock(&browserLock);
+    NSData *incoming = [NSData dataWithBytes:avcc length:length];
+    /* Senders may repeat SPS/PPS at an IDR. That is not a new stream and
+     * must not clear the browser or change the touch generation. */
+    if (configuration && width == videoWidth && height == videoHeight && [incoming isEqualToData:decoderConfiguration]) {
+        pthread_mutex_unlock(&browserLock); return;
+    }
     invalidate_stream(); videoWidth = width; videoHeight = height;
+    decoderConfiguration = incoming;
+    fprintf(stderr, "[BROWSER] stream generation=%u size=%ux%u\n", generation, width, height);
     uint8_t header[9] = {1}; put_be(header + 1, generation, 4);
     put_be(header + 5, width, 2); put_be(header + 7, height, 2);
     NSMutableData *payload = [NSMutableData dataWithBytes:header length:sizeof(header)];
@@ -423,8 +471,9 @@ void showcase_browser_frame(uint64_t timestamp, bool key, const uint8_t *bytes, 
     NSMutableData *payload = [NSMutableData dataWithBytes:header length:sizeof(header)];
     [payload appendBytes:bytes length:length]; NSData *packet = websocket_packet(payload, 2);
     for (SCBrowserClient *c in clients) if (c.role == 1) {
-        if (c.queued + packet.length > MAX_QUEUE_BYTES || c.output.count >= 10) {
+        if (c.queued + packet.length > MAX_QUEUE_BYTES || c.output.count >= 45) {
             discard_unsent(c); c.needsKey = true; enqueue(c, configuration); wantKey = true;
+            congestionRecoveries++;
         }
         if (c.needsKey && !key) continue;
         if (c.queued + packet.length > MAX_QUEUE_BYTES) { c.needsKey = true; wantKey = true; continue; }

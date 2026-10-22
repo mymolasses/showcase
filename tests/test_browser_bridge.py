@@ -19,7 +19,7 @@ import threading
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-TOKEN = '0123456789abcdef0123456789abcdef'  # test-only token
+TOKEN = '0427'  # test-only token
 
 
 def fixture(path):
@@ -129,6 +129,8 @@ def main():
                 packet = media.receive()
             generation = struct.unpack('!I', packet[1:5])[0]
             assert struct.unpack('!HH', packet[5:9]) == (320, 180)
+            command('r')
+            assert status()['generation'] == generation, 'identical SPS/PPS must not reset playback or touch'
             times = []
             while len(times) < 3:
                 packet = media.receive()
@@ -164,7 +166,11 @@ def main():
             malformed = WS(port, '/control'); wait_event('TOUCH 3')
             malformed.send(dict(type='touch', phase=True, x=1, y=1, generation=state['generation']))
             assert malformed.sock.recv(1) == b''; malformed.close()
-            print('PASS: authenticated WS, origin/host checks, one controller, AVC config/time, touch lifecycle, deadman, foreground reset, stale generation')
+            # PIN failures share a bounded budget across HTTP and WS routes.
+            for _ in range(4):
+                bad = WS(port, '/control', '9999', expected=403); bad.close()
+            blocked = WS(port, '/control', TOKEN, expected=429); blocked.close()
+            print('PASS: four-digit PIN + throttling, duplicate AVC config, origin/host, one controller, AVC time, touch, deadman, foreground reset, stale generation')
         finally:
             for ws in sockets:
                 ws.close()

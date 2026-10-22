@@ -1,8 +1,21 @@
 # iPhone 14 Pro Max / iOS 16.2 / Dopamine rootless 安装测试
 
-本指南对应 `1.0~beta5-2+browser1` 浏览器原型，2026-10-22 构建。
+本指南对应 `1.0~beta5-2+browser2` 浏览器原型，2026-10-22 构建。
 安装包是 `iphoneos-arm64.deb`，使用 `/var/jb` 布局；它不是 IPA。
 这是针对该系统和越狱布局构建的测试包，尚未在真实 iPhone／特斯拉上验收。
+
+## Browser2 升级
+
+1. 在 Showcase 三指轻点调出控制，点 × 停止 CarPlay，再安装 Browser2 deb 覆盖旧包。
+2. 打开 Settings → Display，确认 Browser Output 开启；网页默认 1080p，可选择 900p／720p。
+3. 记下新四位配对码；旧版长配对码失效，前导零需要保留。
+4. 返回首页，重新 Start CarPlay。关闭旧网页，再打开热点地址，输入四位码。
+5. 网页顶部会显示实际视频分辨率。若热点速度不足，降低档位后停止并重新启动 CarPlay。
+
+Browser2 修复重复 AVC 配置重建播放器、静态画面恢复被误判为时间轴错误等路径，
+增加缓冲恢复、保留最后一帧、渐进重连、明确的配对错误提示和服务日志。
+新增回归覆盖四位配对、错误次数限制、重复配置、静态恢复、连接中断恢复、
+单指操作与后台释放；自动化使用 Mac 上的真实 Chrome 和合成视频，不代表车机硬件验收。
 
 ## 包内内容与验证范围
 
@@ -22,7 +35,7 @@
 1. 确认手机已经进入 **Dopamine 已越狱** 状态；如果重启过，先在 Dopamine 中重新越狱。
 2. 退出／停止正在运行的 Showcase 会话。
 3. 在 Sileo 确认已安装 rootless 版本的 **ldid** 与 **UIKit Tools（uikittools）**。如果此前已安装官方 Showcase，通常已有这两个依赖。
-4. 把 `com.rostane.showcase_1.0~beta5-2+browser1_iphoneos-arm64.deb` 传到手机，例如通过 AirDrop 或 Filza 的文件传输功能。
+4. 把 `com.rostane.showcase_1.0~beta5-2+browser2_iphoneos-arm64.deb` 传到手机，例如通过 AirDrop 或 Filza 的文件传输功能。
 5. 用越狱环境里的 **Filza** 打开 `.deb`，选择安装，等待结束。不要把这个包交给巨魔当 IPA 安装。
 6. 若提示缺少依赖，先回到 Sileo 安装对应依赖，再重新安装本包，不要忽略错误。
 7. 回到桌面，打开 **Showcase Browser**。若安装成功但图标未出现，在终端执行 `sudo uicache -p /var/jb/Applications/Showcase.app`。
@@ -35,7 +48,7 @@ Filza 开发者说明：[DEB 安装与文件传输](https://www.tigisoftware.com
 
 ```sh
 cd /var/mobile/Downloads
-sudo dpkg -i './com.rostane.showcase_1.0~beta5-2+browser1_iphoneos-arm64.deb'
+sudo dpkg -i './com.rostane.showcase_1.0~beta5-2+browser2_iphoneos-arm64.deb'
 ```
 
 输入你在 Dopamine 设置的密码。如果报告缺少依赖，可在 Sileo 安装依赖，或在确认 apt 提示后用 `sudo apt-get -f install` 修复，再重新安装本包。
@@ -46,7 +59,7 @@ sudo dpkg -i './com.rostane.showcase_1.0~beta5-2+browser1_iphoneos-arm64.deb'
 dpkg-query -W -f='${Package} ${Version} ${Architecture}\n' com.rostane.showcase
 ```
 
-应包含 `1.0~beta5-2+browser1` 和 `iphoneos-arm64`。
+应包含 `1.0~beta5-2+browser2` 和 `iphoneos-arm64`。
 
 ## 测试顺序
 
@@ -59,8 +72,9 @@ dpkg-query -W -f='${Package} ${Version} ${Architecture}\n' com.rostane.showcase
 ### 2. 启用浏览器输出
 
 打开 Showcase 的 Settings → Display，启用 **Browser Output / 浏览器输出（原型）**。
-停止并重连 CarPlay，使 1280×720、30 fps 和发送机音频配置生效。
-重新打开 Display 设置查看当前热点 IPv4 地址和 32 位配对码。
+选择网页分辨率，默认 1920×1080 / 30 fps，热点较慢时可用 900p 或 720p。
+停止并重连 CarPlay，使 所选浏览器分辨率、30 fps 和发送机音频配置生效。
+重新打开 Display 设置查看当前热点 IPv4 地址和 4 位数字配对码。
 
 保持接收机 Showcase 前台运行。程序会禁用自动锁屏，但手动锁屏／切到其他 App 会暂停网页画面。
 

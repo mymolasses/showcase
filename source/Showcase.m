@@ -1190,8 +1190,10 @@ static CarPlayDisplayProfile preferred_carplay_display_profile(void) {
         .wlanAttachment = h.wlanAttachment,
     };
     if ([d boolForKey:BROWSER_OUTPUT_KEY]) {
-        profile.width = 1280;
-        profile.height = 720;
+        NSInteger height = [d integerForKey:BROWSER_QUALITY_KEY];
+        if (height != 720 && height != 900 && height != 1080) height = 1080;
+        profile.width = (uint16_t)(height * 16 / 9);
+        profile.height = (uint16_t)height;
         profile.framesPerSecond = 30;
     }
     return profile;
@@ -7158,7 +7160,7 @@ static BOOL g_settings_hardware_loading = NO;
 
     [b card:^(SettingsCard *card) {
         UIView *browser = [self switchRow:@"Browser Output / 浏览器输出（原型）"
-            subtitle:@"Reconnect CarPlay after changing. 1280 × 720 · 30 fps · foreground only."
+            subtitle:@"Stop CarPlay, then Start CarPlay to apply changes. Foreground only."
             on:[d boolForKey:BROWSER_OUTPUT_KEY] width:w changed:^(BOOL on) {
                 setter(BROWSER_OUTPUT_KEY, on);
                 if (on) showcase_browser_token(YES);
@@ -7169,7 +7171,7 @@ static BOOL g_settings_hardware_loading = NO;
     }];
     if ([d boolForKey:BROWSER_OUTPUT_KEY]) {
         NSString *code = showcase_browser_token(YES) ?: @"Unavailable";
-        NSString *details = [NSString stringWithFormat:@"%@\n\nPairing code / 配对码:\n%@\n\nKeep Showcase in the foreground. Audio stays on the sending iPhone.",
+        NSString *details = [NSString stringWithFormat:@"Hotspot entry / 热点入口（启动会话后生效）:\n%@\n\n4-digit PIN / 四位配对码:\n%@\n\nKeep Showcase in the foreground. Audio stays on the sending iPhone.",
             showcase_browser_addresses(), code];
         [b labelText:details font:[UIFont monospacedDigitSystemFontOfSize:14 weight:UIFontWeightRegular]
             alpha:0.8 inset:16 gapAfter:16 color:nil];
@@ -7177,7 +7179,18 @@ static BOOL g_settings_hardware_loading = NO;
             [card addRow:[self actionRow:@"Copy Browser Pairing Code / 复制配对码"
                 color:nil width:w enabled:YES action:^{ [UIPasteboard generalPasteboard].string = code; }] height:52];
         }];
-        [b message:@"Browser mode fixes the stream at 1280 × 720 / 30 fps. Turn it off to use the display settings below."
+        NSInteger height = [d integerForKey:BROWSER_QUALITY_KEY];
+        NSInteger quality = height == 720 ? 0 : height == 900 ? 1 : 2;
+        [b card:^(SettingsCard *card) {
+            [card addRow:[self segmentRow:@"Browser / 网页"
+                items:@[@"720p", @"900p", @"1080p"] selected:quality width:w enabled:YES
+                changed:^(NSInteger index) {
+                    [d setInteger:(index == 0 ? 720 : index == 1 ? 900 : 1080) forKey:BROWSER_QUALITY_KEY];
+                    [d synchronize];
+                    dispatch_async(dispatch_get_main_queue(), ^{ [weakSelf render]; });
+                }] height:52];
+        }];
+        [b message:@"1080p is the default; choose 900p or 720p for a slower hotspot. 30 fps. Stop and restart CarPlay after changes. / 默认 1080p，热点较慢可选 900p 或 720p。更改后停止并重新启动 CarPlay。"
             color:[UIColor colorWithWhite:1 alpha:0.6]];
     }
 
