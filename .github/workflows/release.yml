@@ -31,6 +31,7 @@ jobs:
           set -euo pipefail
           test "$GITHUB_REF_TYPE" = tag
           test "$GITHUB_REF_NAME" = "v$(cat VERSION)"
+          python3 -c 'import tools.build_browser_rootless as b; print(b.DISPLAY_NAME, b.VERSION, b.BUILD_NUMBER)'
       - name: Prepare isolated browser tests
         shell: bash
         run: |
@@ -71,10 +72,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          app_name=$(python3 -c 'import tools.build_browser_rootless as b; print(b.DISPLAY_NAME)')
           if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release create "$GITHUB_REF_NAME" --verify-tag --draft \
-              --title "Showcase Browser 5 · $GITHUB_REF_NAME" \
-              --notes-file docs/RELEASE_v1.0.5.md
+              --title "$app_name $GITHUB_REF_NAME" \
+              --notes-file docs/RELEASE_NOTES.md
           fi
           gh release upload "$GITHUB_REF_NAME" \
             build/browser-rootless/*.deb \
@@ -82,6 +84,6 @@ jobs:
             build/browser-rootless/build-provenance.json \
             docs/BROWSER5.md --clobber
           gh release edit "$GITHUB_REF_NAME" --draft=false --prerelease \
-            --title "Showcase Browser 5 · $GITHUB_REF_NAME" \
-            --notes-file docs/RELEASE_v1.0.5.md
+            --title "$app_name $GITHUB_REF_NAME" \
+            --notes-file docs/RELEASE_NOTES.md
           gh release view "$GITHUB_REF_NAME" --json url,assets

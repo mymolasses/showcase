@@ -15,6 +15,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import plistlib
+import re
 import subprocess
 import sys
 import tarfile
@@ -26,6 +27,12 @@ UPSTREAM_URL = ('https://github.com/amineross/showcase/releases/download/v1.0-be
                 'com.rostane.showcase_1.0.beta5-2_iphoneos-arm64.deb')
 APP = 'var/jb/Applications/Showcase.app/'
 VERSION = (ROOT / 'VERSION').read_text(encoding='utf-8').strip()
+BUILD_NUMBER = (ROOT / 'BUILD_NUMBER').read_text(encoding='utf-8').strip()
+DISPLAY_NAME = plistlib.loads((ROOT / 'source/Info.plist').read_bytes())['CFBundleDisplayName']
+if not re.fullmatch(r'(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)', VERSION):
+    raise ValueError('VERSION must use major.minor.patch')
+if not BUILD_NUMBER.isdigit() or int(BUILD_NUMBER) < 1:
+    raise ValueError('BUILD_NUMBER must be a positive increasing integer')
 NAME = 'com.rostane.showcase_' + VERSION + '_iphoneos-arm64.deb'
 
 
@@ -133,6 +140,7 @@ def main():
                     'packaging/control-rootless/postinst', 'packaging/control-rootless/prerm',
                     'source/carplay_pair.c', 'source/carplay_pair.h', 'source/baa_broker.h']
     provenance = {'package': 'com.rostane.showcase', 'version': VERSION,
+                  'display_name': DISPLAY_NAME, 'build_number': BUILD_NUMBER,
                   'architecture': 'iphoneos-arm64', 'macho_architecture': 'arm64',
                   'deployment_target': '16.2', 'jailbreak_layout': 'Dopamine rootless /var/jb',
                   'source_repository': 'https://github.com/mymolasses/showcase', 'source_commit': revision,
@@ -148,7 +156,7 @@ def main():
         ui = work / 'Showcase'
         service = work / 'CarPlay Simulator'
         probe = work / 'ShowcaseNet'
-        run(flags + ['-DAPP_VERSION="' + VERSION + ' Browser 5"', '-DPACKAGE_VERSION="' + VERSION + '"',
+        run(flags + ['-DAPP_NAME="' + DISPLAY_NAME + '"', '-DAPP_VERSION="' + VERSION + '"', '-DPACKAGE_VERSION="' + VERSION + '"',
                      'source/Showcase.m', '-framework', 'UIKit', '-framework', 'AVFoundation',
                      '-framework', 'AudioToolbox', '-framework', 'CoreMedia', '-framework', 'Foundation',
                      '-framework', 'Security', '-Wl,-undefined,dynamic_lookup', '-o', str(ui)])
@@ -174,13 +182,13 @@ def main():
         replace(payload, APP + 'CarPlay Simulator', service.read_bytes(), 0o4755)
         replace(payload, APP + 'ShowcaseNet', probe.read_bytes(), 0o4755)
     info = plistlib.loads(payload[APP + 'Info.plist'][1])
-    info.update(CFBundleDisplayName='Showcase Browser', CFBundleShortVersionString=VERSION,
-                CFBundleVersion='1.0.505', MinimumOSVersion='16.2')
+    info.update(CFBundleDisplayName=DISPLAY_NAME, CFBundleName=DISPLAY_NAME,
+                CFBundleShortVersionString=VERSION, CFBundleVersion=BUILD_NUMBER, MinimumOSVersion='16.2')
     replace(payload, APP + 'Info.plist', plistlib.dumps(info), 0o644)
     # Retain upstream package ID and postinst signing for a normal upgrade over
     # Showcase; a second package would collide with its BTstack paths/socket.
     lines, skipping_description = [], False
-    updates = {'Name': 'Showcase Browser Prototype (Rootless)', 'Version': VERSION,
+    updates = {'Name': DISPLAY_NAME, 'Version': VERSION,
                'Maintainer': 'mymolasses <mymolasses@users.noreply.github.com>',
                'Depends': 'firmware (>= 16.2), uikittools, ldid',
                'Homepage': 'https://github.com/mymolasses/showcase'}
