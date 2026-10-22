@@ -95,6 +95,10 @@ need_file "$REPO_ROOT/source/carplay_services.m"
 need_file "$REPO_ROOT/source/carplay_pair.c"
 need_file "$REPO_ROOT/source/carplay_pair.h"
 need_file "$REPO_ROOT/source/baa_broker.h"
+need_file "$REPO_ROOT/source/browser_bridge.m"
+need_file "$REPO_ROOT/source/browser_bridge.h"
+need_file "$REPO_ROOT/source/browser_settings.h"
+need_file "$REPO_ROOT/source/browser_assets.h"
 need_file "$REPO_ROOT/source/vendor/monocypher/monocypher.c"
 need_file "$REPO_ROOT/source/vendor/monocypher/monocypher-ed25519.c"
 need_file "$REPO_ROOT/source/vendor/libtommath/tommath.c"
@@ -143,6 +147,10 @@ cp "$REPO_ROOT/source/Showcase.m" \
    "$REPO_ROOT/source/carplay_pair.c" \
    "$REPO_ROOT/source/carplay_pair.h" \
    "$REPO_ROOT/source/baa_broker.h" \
+   "$REPO_ROOT/source/browser_bridge.m" \
+   "$REPO_ROOT/source/browser_bridge.h" \
+   "$REPO_ROOT/source/browser_settings.h" \
+   "$REPO_ROOT/source/browser_assets.h" \
    "$REPO_ROOT/source/Info.plist" \
    "$REPO_ROOT/source/ent_app.xml" \
    "$REPO_ROOT/source/ent_bt.xml" \
@@ -191,7 +199,7 @@ clang -fobjc-arc -DSHOWCASE_ROOTLESS=1 -miphoneos-version-min=12.0 -isysroot '$S
     -Wl,-undefined,dynamic_lookup
 
 clang -fobjc-arc -DSHOWCASE_ROOTLESS=1 -miphoneos-version-min=12.0 -isysroot '$SDK_REMOTE' \
-    -o carplay_services carplay_services.m carplay_pair.c \
+    -o carplay_services carplay_services.m carplay_pair.c browser_bridge.m \
     vendor/monocypher/monocypher.c \
     vendor/monocypher/monocypher-ed25519.c \
     vendor/libtommath/tommath.c \

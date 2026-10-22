@@ -83,6 +83,10 @@ scp_cmd "$SRC/Showcase.m" \
         "$SRC/carplay_pair.c" \
         "$SRC/carplay_pair.h" \
         "$SRC/baa_broker.h" \
+        "$SRC/browser_bridge.m" \
+        "$SRC/browser_bridge.h" \
+        "$SRC/browser_settings.h" \
+        "$SRC/browser_assets.h" \
         "$STAGED/Info.plist" \
         "$SRC/ent_app.xml" \
         "$SRC/ent_bt.xml" \
@@ -131,7 +135,7 @@ echo "       OK"
 echo ""
 echo "[4/7] Compiling carplay_services"
 ssh_cmd "clang -fobjc-arc -miphoneos-version-min=12.0 -isysroot $SDK_REMOTE \
-    -o /tmp/carplay_services /tmp/carplay_services.m /tmp/carplay_pair.c \
+    -o /tmp/carplay_services /tmp/carplay_services.m /tmp/carplay_pair.c /tmp/browser_bridge.m \
     /tmp/vendor/monocypher/monocypher.c \
     /tmp/vendor/monocypher/monocypher-ed25519.c \
     /tmp/vendor/libtommath/tommath.c \

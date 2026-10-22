@@ -45,6 +45,7 @@
 #include <mach/mach_time.h>
 #include <notify.h>
 #include "baa_broker.h"
+#include "browser_settings.h"
 
 extern char **environ;
 
@@ -1188,6 +1189,11 @@ static CarPlayDisplayProfile preferred_carplay_display_profile(void) {
         .framesPerSecond = fps,
         .wlanAttachment = h.wlanAttachment,
     };
+    if ([d boolForKey:BROWSER_OUTPUT_KEY]) {
+        profile.width = 1280;
+        profile.height = 720;
+        profile.framesPerSecond = 30;
+    }
     return profile;
 }
 
@@ -3545,6 +3551,7 @@ static pid_t reusable_baa_broker(void) {
 }
 
 - (void)handleBackground {
+    [UIApplication sharedApplication].idleTimerDisabled = NO;
     if (self.state != StateIdle && self.state != StateStopping) {
         ip_log("backgrounded — preserving CarPlay session");
         g_video_suspended = 1;
@@ -3866,6 +3873,10 @@ static pid_t reusable_baa_broker(void) {
 }
 
 - (void)renderState {
+    [UIApplication sharedApplication].idleTimerDisabled =
+        [[NSUserDefaults standardUserDefaults] boolForKey:BROWSER_OUTPUT_KEY] &&
+        self.state != StateIdle && self.state != StateStopping &&
+        [UIApplication sharedApplication].applicationState == UIApplicationStateActive;
     self.setupOverlay.hidden = NO;
     self.closeButton.hidden = YES;
     self.controlsGesture.enabled = (self.state == StateActive);
@@ -4601,6 +4612,11 @@ static pid_t reusable_baa_broker(void) {
         boolForKey:RECEIVER_AUDIO_KEY];
     BOOL rightHandDrive = [[NSUserDefaults standardUserDefaults]
         boolForKey:RIGHT_HAND_DRIVE_KEY];
+    BOOL browserOutput = [[NSUserDefaults standardUserDefaults] boolForKey:BROWSER_OUTPUT_KEY];
+    if (browserOutput && !showcase_browser_token(YES)) {
+        [self failWith:@"Unable to create the browser pairing code."];
+        return;
+    }
     CarPlayDisplayProfile display =
         preferred_carplay_display_profile();
     uint16_t displayWidth = display.width;
@@ -4655,7 +4671,8 @@ static pid_t reusable_baa_broker(void) {
         (char*)"--height", heightBuf,
         (char*)"--fps", fpsBuf,
         (char*)"--screen-rcvbuf", receiveBufferBuf,
-        (char*)"--audio", (char*)(receiverAudio ? "receiver" : "sender"),
+        (char*)"--audio", (char*)(receiverAudio && !browserOutput ? "receiver" : "sender"),
+        (char*)"--browser-output", (char*)(browserOutput ? "enabled" : "disabled"),
         rightHandDrive ? (char*)"--right-hand-drive" : NULL,
         NULL
     };
@@ -5482,6 +5499,13 @@ static NSString *hotspot_name(void) {
         self.clientFd = c;
         __sync_add_and_fetch(&g_touch_epoch, 1);
         g_touch_fd = c;
+        /* A helper may connect after the app has already gone to background.
+         * Send current visibility once, not just subsequent notifications. */
+        if ([[NSUserDefaults standardUserDefaults] boolForKey:BROWSER_OUTPUT_KEY]) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                send_app_visibility([UIApplication sharedApplication].applicationState == UIApplicationStateActive ? 1 : 0);
+            });
+        }
         [self ipcHandleConnection:c];
         g_touch_fd = -1;
         __sync_add_and_fetch(&g_touch_epoch, 1);
@@ -7131,6 +7155,31 @@ static BOOL g_settings_hardware_loading = NO;
     CarPlayDisplayProfile profile = preferred_carplay_display_profile();
     BOOL custom = priority == CarPlayVideoCustom;
     CarPlayDisplayHardware hardware = carplay_display_hardware();
+
+    [b card:^(SettingsCard *card) {
+        UIView *browser = [self switchRow:@"Browser Output / 浏览器输出（原型）"
+            subtitle:@"Reconnect CarPlay after changing. 1280 × 720 · 30 fps · foreground only."
+            on:[d boolForKey:BROWSER_OUTPUT_KEY] width:w changed:^(BOOL on) {
+                setter(BROWSER_OUTPUT_KEY, on);
+                if (on) showcase_browser_token(YES);
+                [weakSelf.appDelegate renderState];
+                dispatch_async(dispatch_get_main_queue(), ^{ [weakSelf render]; });
+            }];
+        [card addRow:browser height:browser.bounds.size.height];
+    }];
+    if ([d boolForKey:BROWSER_OUTPUT_KEY]) {
+        NSString *code = showcase_browser_token(YES) ?: @"Unavailable";
+        NSString *details = [NSString stringWithFormat:@"%@\n\nPairing code / 配对码:\n%@\n\nKeep Showcase in the foreground. Audio stays on the sending iPhone.",
+            showcase_browser_addresses(), code];
+        [b labelText:details font:[UIFont monospacedDigitSystemFontOfSize:14 weight:UIFontWeightRegular]
+            alpha:0.8 inset:16 gapAfter:16 color:nil];
+        [b card:^(SettingsCard *card) {
+            [card addRow:[self actionRow:@"Copy Browser Pairing Code / 复制配对码"
+                color:nil width:w enabled:YES action:^{ [UIPasteboard generalPasteboard].string = code; }] height:52];
+        }];
+        [b message:@"Browser mode fixes the stream at 1280 × 720 / 30 fps. Turn it off to use the display settings below."
+            color:[UIColor colorWithWhite:1 alpha:0.6]];
+    }
 
     [b card:^(SettingsCard *card) {
         UIView *dock = [self switchRow:L(@"Dock on the Right") subtitle:nil

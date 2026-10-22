@@ -1,0 +1,49 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+#pragma once
+#import <Foundation/Foundation.h>
+#include <sys/stat.h>
+#include <ifaddrs.h>
+#include <arpa/inet.h>
+
+#define BROWSER_OUTPUT_KEY @"browserOutputEnabled"
+#define BROWSER_TOKEN_PATH @"/var/mobile/Library/Showcase/browser-token"
+#define BROWSER_PORT 8080
+
+/* Shared by the UI and service; the token is never placed in argv or logs. */
+static NSString *showcase_browser_token(BOOL create) {
+    NSString *token = [[NSString stringWithContentsOfFile:BROWSER_TOKEN_PATH
+        encoding:NSUTF8StringEncoding error:NULL]
+        stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    NSCharacterSet *hex = [NSCharacterSet characterSetWithCharactersInString:@"0123456789abcdef"];
+    if (token.length == 32 && [token rangeOfCharacterFromSet:hex.invertedSet].location == NSNotFound) {
+        chmod(BROWSER_TOKEN_PATH.fileSystemRepresentation, 0600);
+        return token;
+    }
+    if (!create) return nil;
+    uint8_t random[16];
+    arc4random_buf(random, sizeof(random));
+    NSMutableString *value = [NSMutableString string];
+    for (size_t i = 0; i < sizeof(random); i++) [value appendFormat:@"%02x", random[i]];
+    [[NSFileManager defaultManager] createDirectoryAtPath:BROWSER_TOKEN_PATH.stringByDeletingLastPathComponent
+        withIntermediateDirectories:YES attributes:@{NSFilePosixPermissions: @0700} error:NULL];
+    NSData *bytes = [value dataUsingEncoding:NSUTF8StringEncoding];
+    if (![[NSFileManager defaultManager] createFileAtPath:BROWSER_TOKEN_PATH contents:bytes
+        attributes:@{NSFilePosixPermissions: @0600}]) return nil;
+    return value;
+}
+
+static NSString *showcase_browser_addresses(void) {
+    struct ifaddrs *addresses = NULL;
+    NSMutableArray *urls = [NSMutableArray array];
+    if (getifaddrs(&addresses) != 0) return @"Hotspot address unavailable";
+    for (struct ifaddrs *a = addresses; a; a = a->ifa_next) {
+        if (!a->ifa_addr || a->ifa_addr->sa_family != AF_INET ||
+            strncmp(a->ifa_name, "bridge", 6) != 0) continue;
+        char ip[INET_ADDRSTRLEN];
+        struct sockaddr_in *v4 = (struct sockaddr_in *)a->ifa_addr;
+        if (inet_ntop(AF_INET, &v4->sin_addr, ip, sizeof(ip)))
+            [urls addObject:[NSString stringWithFormat:@"http://%s:%d", ip, BROWSER_PORT]];
+    }
+    freeifaddrs(addresses);
+    return urls.count ? [urls componentsJoinedByString:@"\n"] : @"Start CarPlay to show the hotspot address";
+}

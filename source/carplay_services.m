@@ -39,6 +39,8 @@
 #include <mach/mach_time.h>
 #include "carplay_pair.h"
 #include "baa_broker.h"
+#include "browser_bridge.h"
+#include "browser_settings.h"
 #include "vendor/monocypher/monocypher.h"
 
 /*
@@ -141,6 +143,7 @@ static bool g_receiver_audio = false;
 /* Places CarPlay's dock on the right edge, for right-hand-drive cars and for
  * displays mounted to the driver's right. */
 static bool g_right_hand_drive = false;
+static bool g_browser_enabled = false;
 
 static void parse_args(int argc, char *argv[]) {
     for (int i = 1; i < argc; i++) {
@@ -169,6 +172,10 @@ static void parse_args(int argc, char *argv[]) {
                 g_screen_receive_buffer = (int)value;
         } else if (!strcmp(argv[i], "--right-hand-drive")) {
             g_right_hand_drive = true;
+        } else if (!strcmp(argv[i], "--browser")) {
+            g_browser_enabled = true;
+        } else if (!strcmp(argv[i], "--browser-output") && i + 1 < argc) {
+            g_browser_enabled = strcmp(argv[++i], "enabled") == 0;
         } else if (!strcmp(argv[i], "--audio") && i + 1 < argc) {
             g_receiver_audio = strcmp(argv[++i], "receiver") == 0;
         } else if (!strcmp(argv[i], "--baa-broker")) {
@@ -3717,6 +3724,10 @@ static void touch_reader_func(void *arg) {
                 break;
             }
 
+            /* One input owner: a paired browser controller takes precedence
+             * over the receiver's local CarPlay surface. */
+            if (g_browser_enabled && showcase_browser_has_controller()) { free(payload); continue; }
+
             if (len == 5) {
                 /* Accept Beta 2 clients during package transition. */
                 uint8_t phase = payload[0];
@@ -3800,6 +3811,7 @@ static void touch_reader_func(void *arg) {
             uint8_t visible = 0;
             if (!tcp_read_exact(fd, &visible, 1)) break;
             g_app_video_enabled = visible != 0;
+            if (g_browser_enabled) showcase_browser_set_active(g_app_video_enabled);
             printf("[SCREEN] Showcase is %s; video forwarding %s\n",
                    g_app_video_enabled ? "foreground" : "background",
                    g_app_video_enabled ? "resumed" : "paused");
@@ -3982,6 +3994,9 @@ static void *screen_thread_func(void *arg) {
             case 1: { /* VideoConfig — SPS/PPS (AVCC), display dimensions */
                 float width = *(float *)(header + 8 + 8);   /* params[1].f32[0] */
                 float height = *(float *)(header + 8 + 12);  /* params[1].f32[1] */
+                if (g_browser_enabled && isfinite(width) && isfinite(height) && width > 0 && height > 0 &&
+                    width <= 4096 && height <= 4096)
+                    showcase_browser_config((uint16_t)width, (uint16_t)height, body, bodySize);
 
                 /* smallParam[1] carries the screen flags. Bit 1 is
                  * RespectTimestamps, bit 2 Encrypted — the latter is a useful
@@ -4103,6 +4118,7 @@ static void *screen_thread_func(void *arg) {
                 bool isIDR = (header[5] & 0x10) != 0 ||
                     h264_frame_contains_idr(body, ctLen);
                 if (g_app_video_enabled) {
+                    if (g_browser_enabled) showcase_browser_frame(ntpTimestamp, isIDR, body, ctLen);
                     int pendingBytes = 0;
                     if (ioctl(clientFd, FIONREAD, &pendingBytes) != 0 ||
                         pendingBytes < 0)
@@ -4220,6 +4236,7 @@ static void *screen_thread_func(void *arg) {
            msgCount, videoFrameCount, totalBytes);
     fflush(stdout);
     free(body);
+    if (g_browser_enabled) showcase_browser_reset();
     close(clientFd);
     __sync_lock_release(&g_screen_thread_running);
     return NULL;
@@ -6151,6 +6168,15 @@ static void start_mdns_reannounce_loop(DNSServiceRef airplayRef,
  * Main
  * ═══════════════════════════════════════════════════════════════ */
 
+static volatile int32_t browser_resync_pending = 0;
+static void browser_request_keyframe(void) {
+    if (!__sync_bool_compare_and_swap(&browser_resync_pending, 0, 1)) return;
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        send_force_key_frame_command("browser decoder recovery");
+        __sync_lock_test_and_set(&browser_resync_pending, 0);
+    });
+}
+
 int main(int argc, char *argv[]) {
     /* Line-buffered stdout/stderr so logs survive SIGTERM (default is
      * fully-buffered when stdout is a file, which loses everything). */
@@ -6185,6 +6211,18 @@ int main(int argc, char *argv[]) {
     if (!ensure_pair_context()) {
         printf("[SVC] FATAL: could not initialize pairing context\n");
         return 1;
+    }
+
+    if (g_browser_enabled) {
+        NSString *token = showcase_browser_token(NO);
+        if (!token || !showcase_browser_start(BROWSER_PORT, token.UTF8String,
+                queue_touch_report, browser_request_keyframe)) {
+            fprintf(stderr, "[BROWSER] Cannot start local browser service on port %d\n", BROWSER_PORT);
+            return 1;
+        }
+        printf("[BROWSER] Foreground prototype listening on port %d; pairing code is in Settings > Display\n", BROWSER_PORT);
+        /* The UI explicitly confirms foreground state over the existing IPC. */
+        showcase_browser_set_active(false);
     }
 
     printf("[SVC] CarPlay Network Services v5.1 (real Ed25519 pk, no HK)\n");
