@@ -6,8 +6,8 @@
 > See [Tesla setup and certificate requirements](docs/TEST_TESLA_BROWSER4.md). The current working branch removes the PIN and adds live playback recovery and a full-viewport layout, alongside
 > 1080p / 900p / 720p presets and playback/reconnection recovery. Enable it in Settings → Display,
 > then stop and restart CarPlay. Download the rootless test package from
-> [this fork’s Releases](https://github.com/mymolasses/showcase/releases/tag/v1.1.1). See [setup, build instructions, tests and hardware limitations](docs/BROWSER.md).
-> 本版修复见 [Browser5](docs/BROWSER5.md)，需安装 v1.1.1 的新版 deb 并实机验收。Release 流程只在版本标签或手动选择标签时运行，不在分支推送时自动构建。
+> [this fork’s Releases](https://github.com/mymolasses/showcase/releases/tag/v1.1.2). See [setup, build instructions, tests and hardware limitations](docs/BROWSER.md).
+> 本版修复见 [Browser5](docs/BROWSER5.md)，需安装 v1.1.2 的新版 deb 并实机验收。Release 流程只在版本标签或手动选择标签时运行，不在分支推送时自动构建。
 
 ## Updates
 

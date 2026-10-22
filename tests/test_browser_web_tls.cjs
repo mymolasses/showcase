@@ -54,8 +54,13 @@ function frame(bytes,opcode=2){const b=Buffer.from(bytes),h=Buffer.alloc(b.lengt
   assert(wrongHost,'HTTPS certificate hostname must actually be checked');
   browser=await chromium.launch({executablePath:'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',headless:true,args:[
    '--no-proxy-server','--host-resolver-rules=MAP '+domain+' 127.0.0.1','--ignore-certificate-errors-spki-list='+cert.spki]});
-  const page=await browser.newPage();await page.goto('https://'+domain+':'+httpsPort+'/');
-  assert.equal(await page.locator('#pair').count(),1);
+  const page=await browser.newPage();
+  // This transport fixture sends random bytes, not AVC. Actual automatic
+  // playback over HTTPS/WSS is exercised by test_browser_e2e.cjs.
+  await page.route('**/player.js',route=>route.fulfill({contentType:'application/javascript',body:'/* transport fixture */'}));
+  await page.goto('https://'+domain+':'+httpsPort+'/');
+  assert.equal(await page.locator('#pair').count(),0);
+  assert.equal(await page.locator('#surface').count(),1);
   const result=await page.evaluate(async()=>{
    function receive(path,send){return new Promise((resolve,reject)=>{const ws=new WebSocket('wss://'+location.host+path);ws.binaryType='arraybuffer';
     ws.onerror=()=>reject(Error('WSS failed'));ws.onopen=()=>{if(send)ws.send(JSON.stringify({type:'ping'}));};ws.onmessage=e=>{ws.close();resolve(e.data);};});}
@@ -64,7 +69,8 @@ function frame(bytes,opcode=2){const b=Buffer.from(bytes),h=Buffer.alloc(b.lengt
   });
   assert.equal(result.ack,'ack');assert.equal(result.length,large.length);assert.equal(result.digest,crypto.createHash('sha256').update(large).digest('hex'));
   assert(upgrades.includes('/media')&&upgrades.includes('/control'));
-  await page.goto('http://'+domain+':'+httpPort+'/');assert.equal(await page.locator('#pair').count(),1);
+  await page.goto('http://'+domain+':'+httpPort+'/');assert.equal(await page.locator('#pair').count(),0);
+  assert.equal(await page.locator('#surface').count(),1);
   helper.kill('SIGTERM');await once(helper,'exit');
   // Wrong password / wrong certificate hostname: HTTP remains available, HTTPS stays off.
   config.identityPassword='wrong';fs.writeFileSync(path.join(work,'browser-web.json'),JSON.stringify(config));fs.rmSync(state);start();

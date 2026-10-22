@@ -68,6 +68,8 @@ jobs:
           python3 tests/test_bluetooth_recovery.py
           python3 tests/test_localization.py
           python3 tests/test_browser_bridge.py
+          clang tests/test_browser_network.c source/browser_network.c -o "$RUNNER_TEMP/test-browser-network"
+          "$RUNNER_TEMP/test-browser-network"
           node tests/test_browser_player.cjs
           node tests/test_browser_stall.cjs
           node tests/test_browser_live.cjs
