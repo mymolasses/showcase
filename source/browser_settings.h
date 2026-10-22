@@ -12,6 +12,15 @@
 #define BROWSER_PROBE_KEY @"browserNetworkProbeEnabled"
 #define BROWSER_PROBE_STATE @"/var/mobile/Library/Showcase/network-probe.json"
 #define BROWSER_PROBE_PORT 8081
+#define BROWSER_WEB_CONFIG @"/var/mobile/Library/Showcase/browser-web.json"
+#define BROWSER_WEB_IDENTITY @"/var/mobile/Library/Showcase/browser-server.p12"
+#define BROWSER_WEB_DOMAIN @"carplay.99-99-99-99.sslip.io"
+
+static BOOL showcase_web_domain_valid(NSString *domain) {
+    if (![domain isKindOfClass:NSString.class] || domain.length > 253) return NO;
+    NSString *pattern = @"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])$";
+    return [domain rangeOfString:pattern options:NSRegularExpressionSearch].location != NSNotFound;
+}
 
 /* Shared by the UI and service; the token is never placed in argv or logs. */
 static NSString *showcase_browser_token(BOOL create) {

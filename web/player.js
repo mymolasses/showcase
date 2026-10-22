@@ -217,7 +217,7 @@
       if (error.permanent) stop(error.message); else scheduleReconnect('接收机暂时不可达');
       return;
     }
-    const endpoint = 'ws://' + location.host, protocol = 'showcase.' + token;
+    const endpoint = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host, protocol = 'showcase.' + token;
     control = new WebSocket(endpoint + '/control', protocol);
     media = new WebSocket(endpoint + '/media', protocol); media.binaryType = 'arraybuffer';
     control.onopen = () => { if (current === epoch) { lastKeyRequest = -Infinity; requestKey(); } };

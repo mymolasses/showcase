@@ -2,7 +2,7 @@
 (() => {
   'use strict';
   const $ = id => document.getElementById(id);
-  $('player').href = 'http://' + location.hostname + ':8080/';
+  $('player').href = location.origin + '/';
   let count = 0, busy = false;
   async function check() {
     if (busy || document.hidden) return;
@@ -17,6 +17,8 @@
       $('network').textContent = s.localReady ? '本机兼容地址及本地路由已验证。当前浏览器请求已到达接收 iPhone。' : '普通入口已连通；兼容地址状态：' + s.phase;
       $('details').textContent = [
         '版本：' + s.version,
+        '域名：' + s.domain,
+        'HTTPS：' + s.httpsStatus,
         '当前入口：' + location.origin,
         '接收机热点：' + (s.hotspotAddress || '未检测到'),
         '兼容地址：' + s.compatibilityAddress,

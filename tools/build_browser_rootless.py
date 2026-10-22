@@ -25,7 +25,7 @@ UPSTREAM_SHA256 = 'f91ab0bf7ddf94d9eb1eacc56db37e8943ea8f1dce60c4976f793d679707a
 UPSTREAM_URL = ('https://github.com/amineross/showcase/releases/download/v1.0-beta5-2/'
                 'com.rostane.showcase_1.0.beta5-2_iphoneos-arm64.deb')
 APP = 'var/jb/Applications/Showcase.app/'
-VERSION = '1.0~beta5-2+browser3'
+VERSION = '1.0~beta5-2+browser4'
 NAME = 'com.rostane.showcase_' + VERSION + '_iphoneos-arm64.deb'
 
 
@@ -129,6 +129,7 @@ def main():
     source_paths = ['source/Showcase.m', 'source/carplay_services.m', 'source/browser_bridge.m',
                     'source/browser_bridge.h', 'source/browser_settings.h', 'source/browser_assets.h',
                     'source/browser_network.c', 'source/browser_network.h', 'source/browser_probe.m',
+                    'source/browser_web_tls.m', 'source/browser_web_tls.h',
                     'packaging/control-rootless/postinst', 'packaging/control-rootless/prerm',
                     'source/carplay_pair.c', 'source/carplay_pair.h', 'source/baa_broker.h']
     provenance = {'package': 'com.rostane.showcase', 'version': VERSION,
@@ -147,7 +148,7 @@ def main():
         ui = work / 'Showcase'
         service = work / 'CarPlay Simulator'
         probe = work / 'ShowcaseNet'
-        run(flags + ['-DAPP_VERSION="1.0 Beta 5-2 Browser 3"', '-DPACKAGE_VERSION="' + VERSION + '"',
+        run(flags + ['-DAPP_VERSION="1.0 Beta 5-2 Browser 4"', '-DPACKAGE_VERSION="' + VERSION + '"',
                      'source/Showcase.m', '-framework', 'UIKit', '-framework', 'AVFoundation',
                      '-framework', 'AudioToolbox', '-framework', 'CoreMedia', '-framework', 'Foundation',
                      '-framework', 'Security', '-Wl,-undefined,dynamic_lookup', '-o', str(ui)])
@@ -155,8 +156,8 @@ def main():
                      'source/vendor/monocypher/monocypher.c', 'source/vendor/monocypher/monocypher-ed25519.c',
                      'source/vendor/libtommath/tommath.c', '-framework', 'Foundation', '-framework', 'Security',
                      '-Wl,-undefined,dynamic_lookup', '-o', str(service)])
-        run(flags + ['source/browser_probe.m', 'source/browser_network.c',
-                     '-framework', 'Foundation', '-o', str(probe)])
+        run(flags + ['source/browser_probe.m', 'source/browser_network.c', 'source/browser_web_tls.m',
+                     '-framework', 'Foundation', '-framework', 'Security', '-o', str(probe)])
         for binary, ent in [(ui, 'ent_app.xml'), (service, 'ent_svc.xml'), (probe, 'ent_svc.xml')]:
             run(['codesign', '--force', '--sign', '-', '--timestamp=none', '--generate-entitlement-der',
                  '--entitlements', str(ROOT / 'source' / ent), str(binary)])
@@ -174,7 +175,7 @@ def main():
         replace(payload, APP + 'ShowcaseNet', probe.read_bytes(), 0o4755)
     info = plistlib.loads(payload[APP + 'Info.plist'][1])
     info.update(CFBundleDisplayName='Showcase Browser', CFBundleShortVersionString='1.0',
-                CFBundleVersion='1.0.503', MinimumOSVersion='16.2')
+                CFBundleVersion='1.0.504', MinimumOSVersion='16.2')
     replace(payload, APP + 'Info.plist', plistlib.dumps(info), 0o644)
     # Retain upstream package ID and postinst signing for a normal upgrade over
     # Showcase; a second package would collide with its BTstack paths/socket.
@@ -208,7 +209,7 @@ def main():
     record = (json.dumps(provenance, indent=2, ensure_ascii=False) + '\n').encode()
     replace(payload, 'var/jb/usr/share/showcase/browser-build.json', record, 0o644)
     replace(payload, 'var/jb/usr/share/showcase/BROWSER.md', (ROOT / 'docs/BROWSER.md').read_bytes(), 0o644)
-    replace(payload, 'var/jb/usr/share/showcase/TEST_TESLA_BROWSER3.md', (ROOT / 'docs/TEST_TESLA_BROWSER3.md').read_bytes(), 0o644)
+    replace(payload, 'var/jb/usr/share/showcase/TEST_TESLA_BROWSER4.md', (ROOT / 'docs/TEST_TESLA_BROWSER4.md').read_bytes(), 0o644)
     md5 = ''.join(hashlib.md5(data).hexdigest() + '  ' + name + '\n'
                   for name, (member, data) in sorted(payload.items()) if member.isfile())
     replace(control, 'md5sums', md5.encode(), 0o644)

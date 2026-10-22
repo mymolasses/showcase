@@ -102,6 +102,8 @@ need_file "$REPO_ROOT/source/browser_assets.h"
 need_file "$REPO_ROOT/source/browser_network.c"
 need_file "$REPO_ROOT/source/browser_network.h"
 need_file "$REPO_ROOT/source/browser_probe.m"
+need_file "$REPO_ROOT/source/browser_web_tls.m"
+need_file "$REPO_ROOT/source/browser_web_tls.h"
 need_file "$REPO_ROOT/source/vendor/monocypher/monocypher.c"
 need_file "$REPO_ROOT/source/vendor/monocypher/monocypher-ed25519.c"
 need_file "$REPO_ROOT/source/vendor/libtommath/tommath.c"
@@ -157,6 +159,8 @@ cp "$REPO_ROOT/source/Showcase.m" \
    "$REPO_ROOT/source/browser_network.c" \
    "$REPO_ROOT/source/browser_network.h" \
    "$REPO_ROOT/source/browser_probe.m" \
+   "$REPO_ROOT/source/browser_web_tls.m" \
+   "$REPO_ROOT/source/browser_web_tls.h" \
    "$REPO_ROOT/source/Info.plist" \
    "$REPO_ROOT/source/ent_app.xml" \
    "$REPO_ROOT/source/ent_bt.xml" \
@@ -213,7 +217,7 @@ clang -fobjc-arc -DSHOWCASE_ROOTLESS=1 -miphoneos-version-min=12.0 -isysroot '$S
     -Wl,-undefined,dynamic_lookup
 
 clang -fobjc-arc -DSHOWCASE_ROOTLESS=1 -miphoneos-version-min=16.2 -isysroot '$SDK_REMOTE' \
-    -o ShowcaseNet browser_probe.m browser_network.c -framework Foundation
+    -o ShowcaseNet browser_probe.m browser_network.c browser_web_tls.m -framework Foundation -framework Security
 "
 
 for bin in Showcase carplay_bt carplay_services ShowcaseNet; do

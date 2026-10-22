@@ -2,15 +2,15 @@
 <html lang="zh-CN">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Showcase Browser3 · 车机网络探测</title>
+<title>Showcase Browser4 · 车机网络探测</title>
 <style>
 *{box-sizing:border-box}body{margin:0;background:#101721;color:#e9f1fa;font:18px system-ui,sans-serif;padding:32px;line-height:1.6}main{max-width:950px;margin:auto}h1{font-size:30px;margin:0 0 10px}.card{padding:24px;margin:20px 0;background:#1b2736;border-radius:16px}.ok{color:#69e0b6}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:16px}a{display:inline-block;padding:12px 20px;background:#2866c4;color:white;border-radius:10px;text-decoration:none}#status{font-weight:600}small{color:#acbdd0}
 </style>
 <main>
 <h1>Showcase · 车机网络探测</h1>
-<p class="ok">HTTP 页面已到达当前浏览器 · Browser3</p>
+<p class="ok">HTTP 页面已到达当前浏览器 · Browser4</p>
 <div class="card"><div id="status">正在检查双向响应…</div><p id="network">本页不需要 CarPlay 视频或配对码。接收机请保持 Showcase 前台。</p><pre id="details"></pre></div>
-<div class="card"><p>先确认此页能够持续响应，再测试 CarPlay 画面与触摸。</p><a id="player" href="http://99.99.99.99:8080/">打开 CarPlay 播放页</a><p><small>发送 iPhone 连接成功且 Browser Output 开启后，播放页才会工作。此版探测入口使用 HTTP；本机地址配置成功不代表所有车机版本都允许访问。</small></p></div>
+<div class="card"><p>先确认此页能够持续响应，再测试 CarPlay 画面与触摸。</p><a id="player" href="/">打开 CarPlay 播放页</a><p><small>发送 iPhone 连接成功且 Browser Output 开启后，播放页才会工作。HTTP 与已配置证书的 HTTPS 都可用；本机地址配置成功不代表所有车机版本都允许访问。</small></p></div>
 <p id="error"></p>
 </main>
 <script src="/probe.js" defer></script>

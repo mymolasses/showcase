@@ -2,11 +2,11 @@
 
 > **This fork: foreground browser-output prototype.** Stream CarPlay directly
 > from the jailbroken receiver to a browser and return single-touch input,
-> without an Android relay. Browser3 adds an experimental local compatibility address and independent
-> [Tesla network probe](docs/TEST_TESLA_BROWSER3.md), retaining the four-digit PIN,
+> without an Android relay. Browser4 adds a standard-port CarPlay entry, a free HTTP hostname and configurable HTTPS/WSS.
+> See [Tesla setup and certificate requirements](docs/TEST_TESLA_BROWSER4.md). It retains the four-digit PIN,
 > 1080p / 900p / 720p presets and playback/reconnection recovery. Enable it in Settings → Display,
 > then stop and restart CarPlay. Download the rootless test package from
-> [this fork’s Releases](https://github.com/mymolasses/showcase/releases/tag/browser-prototype-3). See [setup, build instructions, tests and hardware limitations](docs/BROWSER.md).
+> [this fork’s Releases](https://github.com/mymolasses/showcase/releases/tag/browser-prototype-4). See [setup, build instructions, tests and hardware limitations](docs/BROWSER.md).
 > 原型已通过桌面测试，真实 iPhone／特斯拉兼容性仍需实机验收。
 
 ## Updates

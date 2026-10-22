@@ -1,18 +1,21 @@
 # iPhone 14 Pro Max / iOS 16.2 / Dopamine rootless 安装测试
 
-本指南对应 `1.0~beta5-2+browser3` 浏览器原型，2026-10-22 构建。
+本指南对应 `1.0~beta5-2+browser4` 浏览器原型，2026-10-22 构建。
 安装包是 `iphoneos-arm64.deb`，使用 `/var/jb` 布局；它不是 IPA。
 这是针对该系统和越狱布局构建的测试包，尚未在真实 iPhone／特斯拉上验收。
 
-## Browser3 升级与实车网络探测
+## Browser4 升级与实车网络探测
 
-本版新增独立的车机网络探测与本地兼容地址。先按
-[Browser3 实车测试指南](TEST_TESLA_BROWSER3.md)测试 `http://99.99.99.99/` 和备用 8081，
-探测通过后再打开 CarPlay 播放页。该入口是实验 HTTP 适配，仍需真机验证。
+本版在标准 HTTP 80 直接提供 CarPlay 网页、视频和触摸，不再跳转 8080。
+完整测试步骤见 [Browser4 测试指南](TEST_TESLA_BROWSER4.md)。
+开启车机网络探测并显示 `local_ready`、`port80` 后，打开
+`http://carplay.99-99-99-99.sslip.io/` 或 `http://99.99.99.99/`。
+独立探测页改为 `/probe`。只开探测能打开页面，但播放仍需 Browser Output 和 CarPlay 会话。
+默认免费域名只提供 HTTP；HTTPS 443 / WSS 需要配置可控域名和匹配可信 P12 证书，默认未启用。
 
 ## 保留的 Browser2 视频优化
 
-1. 在 Showcase 三指轻点调出控制，点 × 停止 CarPlay，再安装 Browser3 deb 覆盖旧包。
+1. 在 Showcase 三指轻点调出控制，点 × 停止 CarPlay，再安装 Browser4 deb 覆盖旧包。
 2. 打开 Settings → Display，确认 Browser Output 开启；网页默认 1080p，可选择 900p／720p。
 3. 记下新四位配对码；旧版长配对码失效，前导零需要保留。
 4. 返回首页，重新 Start CarPlay。关闭旧网页，再打开热点地址，输入四位码。
@@ -41,7 +44,7 @@ Browser2 修复重复 AVC 配置重建播放器、静态画面恢复被误判为
 1. 确认手机已经进入 **Dopamine 已越狱** 状态；如果重启过，先在 Dopamine 中重新越狱。
 2. 退出／停止正在运行的 Showcase 会话。
 3. 在 Sileo 确认已安装 rootless 版本的 **ldid** 与 **UIKit Tools（uikittools）**。如果此前已安装官方 Showcase，通常已有这两个依赖。
-4. 把 `com.rostane.showcase_1.0~beta5-2+browser3_iphoneos-arm64.deb` 传到手机，例如通过 AirDrop 或 Filza 的文件传输功能。
+4. 把 `com.rostane.showcase_1.0~beta5-2+browser4_iphoneos-arm64.deb` 传到手机，例如通过 AirDrop 或 Filza 的文件传输功能。
 5. 用越狱环境里的 **Filza** 打开 `.deb`，选择安装，等待结束。不要把这个包交给巨魔当 IPA 安装。
 6. 若提示缺少依赖，先回到 Sileo 安装对应依赖，再重新安装本包，不要忽略错误。
 7. 回到桌面，打开 **Showcase Browser**。若安装成功但图标未出现，在终端执行 `sudo uicache -p /var/jb/Applications/Showcase.app`。
@@ -54,7 +57,7 @@ Filza 开发者说明：[DEB 安装与文件传输](https://www.tigisoftware.com
 
 ```sh
 cd /var/mobile/Downloads
-sudo dpkg -i './com.rostane.showcase_1.0~beta5-2+browser3_iphoneos-arm64.deb'
+sudo dpkg -i './com.rostane.showcase_1.0~beta5-2+browser4_iphoneos-arm64.deb'
 ```
 
 输入你在 Dopamine 设置的密码。如果报告缺少依赖，可在 Sileo 安装依赖，或在确认 apt 提示后用 `sudo apt-get -f install` 修复，再重新安装本包。
@@ -65,7 +68,7 @@ sudo dpkg -i './com.rostane.showcase_1.0~beta5-2+browser3_iphoneos-arm64.deb'
 dpkg-query -W -f='${Package} ${Version} ${Architecture}\n' com.rostane.showcase
 ```
 
-应包含 `1.0~beta5-2+browser3` 和 `iphoneos-arm64`。
+应包含 `1.0~beta5-2+browser4` 和 `iphoneos-arm64`。
 
 ## 测试顺序
 
@@ -86,7 +89,7 @@ dpkg-query -W -f='${Package} ${Version} ${Architecture}\n' com.rostane.showcase
 
 ### 3. 先用电脑浏览器测试
 
-把电脑连接到 14 Pro Max 的热点，浏览器打开设置中显示的 `http://实际热点IP:8080`，输入配对码。
+把电脑连接到 14 Pro Max 的热点，浏览器打开设置中显示的 `http://carplay.99-99-99-99.sslip.io/`（开启探测并显示 local_ready、port80 后），输入配对码。
 确认有连续画面，能点击 App、拖动地图、长按并松开。刷新和断开重连也应恢复。
 
 这一步可以先排除手机服务或输入通道问题。普通热点地址以手机显示为准；启用车机网络探测并显示 local_ready 后可测试兼容地址。
@@ -104,7 +107,7 @@ dpkg-query -W -f='${Package} ${Version} ${Architecture}\n' com.rostane.showcase
 5. 在发送 iPhone 上选择特斯拉蓝牙音频，分别检查音乐和导航提示。
 
 通话和 Siri 麦克风路由需另测。测试时记录车型、车机固件、发送机 iOS 和 Dopamine 版本。
-本包增加实验性兼容地址；尚未实现 HTTPS、MJPEG 回退或车辆状态限制适配。Wi-Fi 连上不等于目标车机的 MSE 视频必然可用。
+本包增加标准端口入口、免费 HTTP 域名及可配置 HTTPS；MJPEG 回退和车辆状态限制适配尚未实现。Wi-Fi 连上不等于目标车机的 MSE 视频必然可用。
 
 ## 遇到问题
 

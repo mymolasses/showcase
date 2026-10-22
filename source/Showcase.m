@@ -3646,11 +3646,16 @@ static pid_t reusable_baa_broker(void) {
         return @"探测正在准备，等待地址检查。请稍后刷新。";
     NSMutableString *message = [NSMutableString stringWithFormat:@"状态：%@\n%@\n已收到 HTTP 探测请求：%@ 次\n",
         s[@"phase"] ?: @"unknown", s[@"detail"] ?: @"", s[@"probeRequests"] ?: @0];
+    [message appendFormat:@"HTTP 80：%@\n",[s[@"port80"] boolValue] ? @"可用" : @"不可用，请使用备用入口"];
     NSString *primary = s[@"hotspotAddress"];
-    if (primary.length) [message appendFormat:@"\n普通热点探测：http://%@:8081/\n", primary];
+    if (primary.length) [message appendFormat:@"\n普通热点探测：http://%@:8081/probe\n", primary];
     if ([s[@"localReady"] boolValue]) {
-        if ([s[@"port80"] boolValue]) [message appendString:@"\n车机探测：http://99.99.99.99/\n"];
-        [message appendString:@"备用探测：http://99.99.99.99:8081/\nCarPlay 页面：http://99.99.99.99:8080/\n\n本机地址已配置，仍需车机实际打开验证。"];
+        NSString *domain = s[@"domain"] ?: BROWSER_WEB_DOMAIN;
+        if ([s[@"port80"] boolValue]) [message appendFormat:@"\nCarPlay：http://%@/\nIP 入口：http://99.99.99.99/\n",domain];
+        if ([s[@"port80"] boolValue]) [message appendString:@"探测：http://99.99.99.99/probe\n"];
+        [message appendString:@"备用入口：http://99.99.99.99:8081/\n备用探测：http://99.99.99.99:8081/probe\n"];
+        if ([s[@"httpsReady"] boolValue]) [message appendFormat:@"HTTPS：https://%@/\n",domain];
+        [message appendFormat:@"\nHTTPS：%@\n\n本机地址已配置，仍需车机实际打开验证。",s[@"httpsStatus"] ?: @"未配置证书"];
     } else [message appendString:@"\n兼容入口尚未就绪。请确认个人热点已开，且至少一台设备已连接。"];
     return message;
 }
@@ -6370,7 +6375,7 @@ static UIEdgeInsets showcase_safe_insets(UIView *view) {
 - (void)gap:(CGFloat)gap { self.y += gap; }
 @end
 
-@interface SettingsViewController () <UITextFieldDelegate>
+@interface SettingsViewController () <UITextFieldDelegate, UIDocumentPickerDelegate>
 @property (nonatomic, strong) NSMutableArray<NSString *> *stack;
 @property (nonatomic, strong) SettingsScrollView *sidebarScroll;
 @property (nonatomic, strong) SettingsScrollView *detailScroll;
@@ -7193,6 +7198,78 @@ static BOOL g_settings_hardware_loading = NO;
     return [NSString stringWithFormat:@"%u × %u", size.width, size.height];
 }
 
+- (NSMutableDictionary *)browserWebConfiguration {
+    NSData *bytes = [NSData dataWithContentsOfFile:BROWSER_WEB_CONFIG];
+    id value = bytes.length <= 8192 && bytes ? [NSJSONSerialization JSONObjectWithData:bytes options:0 error:NULL] : nil;
+    return [value isKindOfClass:NSDictionary.class] ? [value mutableCopy] : [NSMutableDictionary dictionary];
+}
+
+- (BOOL)saveBrowserWebConfiguration:(NSDictionary *)value {
+    NSData *bytes = [NSJSONSerialization dataWithJSONObject:value options:0 error:NULL];
+    [[NSFileManager defaultManager] createDirectoryAtPath:BROWSER_WEB_CONFIG.stringByDeletingLastPathComponent withIntermediateDirectories:YES attributes:nil error:NULL];
+    BOOL saved = [bytes writeToFile:BROWSER_WEB_CONFIG options:NSDataWritingAtomic | NSDataWritingFileProtectionCompleteUntilFirstUserAuthentication error:NULL];
+    if (saved) chmod(BROWSER_WEB_CONFIG.fileSystemRepresentation,0600);
+    return saved;
+}
+
+- (void)browserWebMessage:(NSString *)message {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Showcase Web" message:message preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:L(@"OK") style:UIAlertActionStyleDefault handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)editBrowserDomain {
+    __weak SettingsViewController *weakSelf = self;
+    NSMutableDictionary *config = [self browserWebConfiguration];
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"网页域名" message:@"填写完整域名，不含协议、端口或路径。自有域名的 DNS A 记录应指向 99.99.99.99。" preferredStyle:UIAlertControllerStyleAlert];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
+        field.text = config[@"domain"] ?: BROWSER_WEB_DOMAIN;
+        field.autocapitalizationType = UITextAutocapitalizationTypeNone; field.autocorrectionType = UITextAutocorrectionTypeNo; field.keyboardType = UIKeyboardTypeURL;
+    }];
+    [alert addAction:[UIAlertAction actionWithTitle:L(@"Cancel") style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:L(@"Save") style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        NSString *domain = [alert.textFields.firstObject.text.lowercaseString stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+        BOOL valid = showcase_web_domain_valid(domain);
+        if (valid) config[@"domain"] = domain;
+        BOOL saved = valid && [weakSelf saveBrowserWebConfiguration:config];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,NSEC_PER_SEC/3),dispatch_get_main_queue(),^{
+            [weakSelf browserWebMessage:saved ? @"已保存。关闭再开启车机网络探测，使域名与证书检查生效。" : @"保存失败，请检查域名格式和本机文件权限。"];
+        });
+    }]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)documentPicker:(UIDocumentPickerViewController *)controller didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
+    (void)controller; NSURL *url = urls.firstObject; if (!url) return;
+    BOOL scoped = [url startAccessingSecurityScopedResource];
+    NSNumber *size = nil; [url getResourceValue:&size forKey:NSURLFileSizeKey error:NULL];
+    NSData *identity = size.unsignedLongLongValue <= 256*1024 ? [NSData dataWithContentsOfURL:url] : nil;
+    if (scoped) [url stopAccessingSecurityScopedResource];
+    __weak SettingsViewController *weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,NSEC_PER_SEC/3),dispatch_get_main_queue(),^{
+        if (!identity.length || identity.length > 256*1024) { [weakSelf browserWebMessage:@"请选择不超过 256 KB、包含私钥和完整证书链的 P12 / PFX 文件。"]; return; }
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"HTTPS 证书密码" message:@"证书必须匹配设置中的域名。证书和密码仅保存在接收机私有文件，不写入日志或安装包。" preferredStyle:UIAlertControllerStyleAlert];
+        [alert addTextFieldWithConfigurationHandler:^(UITextField *field) { field.secureTextEntry = YES; field.placeholder = @"P12 / PFX 密码"; }];
+        [alert addAction:[UIAlertAction actionWithTitle:L(@"Cancel") style:UIAlertActionStyleCancel handler:nil]];
+        [alert addAction:[UIAlertAction actionWithTitle:L(@"Save") style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+            NSMutableDictionary *config = [weakSelf browserWebConfiguration]; config[@"identityPassword"] = alert.textFields.firstObject.text ?: @"";
+            [[NSFileManager defaultManager] createDirectoryAtPath:BROWSER_WEB_IDENTITY.stringByDeletingLastPathComponent withIntermediateDirectories:YES attributes:nil error:NULL];
+            NSData *previous = [NSData dataWithContentsOfFile:BROWSER_WEB_IDENTITY];
+            BOOL saved = [identity writeToFile:BROWSER_WEB_IDENTITY options:NSDataWritingAtomic | NSDataWritingFileProtectionCompleteUntilFirstUserAuthentication error:NULL];
+            if (saved) { chmod(BROWSER_WEB_IDENTITY.fileSystemRepresentation,0600); saved = [weakSelf saveBrowserWebConfiguration:config]; }
+            if (!saved) {
+                if (previous) [previous writeToFile:BROWSER_WEB_IDENTITY options:NSDataWritingAtomic error:NULL];
+                else [[NSFileManager defaultManager] removeItemAtPath:BROWSER_WEB_IDENTITY error:NULL];
+                chmod(BROWSER_WEB_IDENTITY.fileSystemRepresentation,0600);
+            }
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW,NSEC_PER_SEC/3),dispatch_get_main_queue(),^{
+                [weakSelf browserWebMessage:saved ? @"已保存。关闭再开启车机网络探测；只有证书通过域名、有效期及系统信任校验后才会启用 HTTPS。" : @"保存证书失败，请检查文件权限。"];
+            });
+        }]];
+        [weakSelf presentViewController:alert animated:YES completion:nil];
+    });
+}
+
 - (NSString *)videoDescription {
     CarPlayDisplayProfile profile = preferred_carplay_display_profile();
     return [NSString stringWithFormat:L(@"%u × %u at %u fps"),
@@ -7233,9 +7310,17 @@ static BOOL g_settings_hardware_loading = NO;
             color:nil width:w enabled:YES action:^{ [weakSelf render]; }] height:52];
         [card addRow:[self actionRow:@"Copy Network Status / 复制探测状态"
             color:nil width:w enabled:YES action:^{ [UIPasteboard generalPasteboard].string = [weakSelf.appDelegate browserProbeDescription]; }] height:52];
+        [card addRow:[self actionRow:@"Web Domain / 设置网页域名"
+            color:nil width:w enabled:YES action:^{ [weakSelf editBrowserDomain]; }] height:52];
+        [card addRow:[self actionRow:@"Import HTTPS Certificate / 导入 HTTPS 证书"
+            color:nil width:w enabled:YES action:^{
+                UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc] initWithDocumentTypes:@[@"public.data"] inMode:UIDocumentPickerModeImport];
+                picker.delegate = weakSelf; [weakSelf presentViewController:picker animated:YES completion:nil];
+            }] height:52];
     }];
     [b labelText:[self.appDelegate browserProbeDescription] font:[UIFont monospacedDigitSystemFontOfSize:14 weight:UIFontWeightRegular]
         alpha:0.85 inset:16 gapAfter:16 color:nil];
+    [b message:@"默认免费域名提供 HTTP 入口。HTTPS 需你自己的域名及匹配的可信 P12 证书。修改域名或证书后，关闭再开启车机网络探测。" color:[UIColor colorWithWhite:1 alpha:0.65]];
 #endif
 
     [b card:^(SettingsCard *card) {

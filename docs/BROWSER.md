@@ -13,7 +13,7 @@ The upstream CarPlay receiver, authentication and Bluetooth setup are retained.
 ```
 
 两部 iOS 设备仍然需要。接收机与发送机是不同的设备。用户计划用
-iPhone 14 Pro Max / iOS 16.2 做接收机；用户已反馈原生 CarPlay 接收正常；Browser3 的手机／车机稳定性仍待升级后验收。
+iPhone 14 Pro Max / iOS 16.2 做接收机；用户已反馈原生 CarPlay 接收正常；Browser4 的手机／车机稳定性仍待升级后验收。
 先确认原版 Showcase 的蓝牙接管和 CarPlay 接收已经工作。巨魔可安装应用，
 不代表已具备上游 deb、BTstack 和系统服务所要求的越狱运行环境。
 
@@ -24,16 +24,18 @@ iPhone 14 Pro Max / iOS 16.2 做接收机；用户已反馈原生 CarPlay 接收
 - 声音留在发送 iPhone；请在发送机选择车载蓝牙。音乐、导航语音、通话、Siri
   的实际路由需分别验证，不能由网页有画面推断全部可用。
 - 不支持锁屏／后台常驻；进入后台会停止网页视频并释放按压。
-- Browser3 增加实验性本地兼容地址／内核路由检查；不包含 VPN、HTTPS、WebCodecs、MJPEG 或车辆行驶限制的适配。
+- Browser4 提供实验性本地兼容地址、标准 HTTP 80 直达、免费 HTTP 域名和可配置 HTTPS 443 / WSS；不包含 VPN、WebCodecs、MJPEG 或车辆行驶限制适配。
 
-## Browser3 车机网络探测
+## Browser4 标准端口入口
 
-rootless 包新增 Settings → Display → Tesla Network Probe / 车机网络探测，
-不依赖 CarPlay 会话，检测实际热点桥后，在回环接口建立 `99.99.99.99/32` 与对应内核本地路由；回包沿用热点原路由。
-配置成功后测试 `http://99.99.99.99/` 或 `http://99.99.99.99:8081/`，
-通过后才测试已有播放页 `http://99.99.99.99:8080/`。
-普通热点入口保留，不改 DHCP、默认路由或防火墙；地址和热点回程仍需 iOS／车机实测。
-详见 [Browser3 实车网络测试与回滚](TEST_TESLA_BROWSER3.md)。
+Settings → Display → Tesla Network Probe / 车机网络探测检测实际热点桥，
+在回环接口建立 `99.99.99.99/32` 与对应本地路由；回包沿用热点原路由。
+状态 `local_ready` 且 `port80` 后，打开 `http://carplay.99-99-99-99.sslip.io/`
+或 `http://99.99.99.99/`，直接进入 CarPlay 页。网络 helper 将媒体、触摸和状态
+转发到固定的本机桥接服务，网页无需添加 8080。探测页为 `/probe`；8081 为备用端口。
+普通热点入口保留，不改 DHCP、默认路由或防火墙；地址和热点回程需 iOS／车机实测。
+HTTPS 需要可控域名和匹配可信 P12 证书；默认未配置，免费 DNS 不附带证书。
+详见 [Browser4 实车测试、免费域名与 HTTPS](TEST_TESLA_BROWSER4.md)。
 
 ## 使用
 
@@ -42,15 +44,15 @@ rootless 包新增 Settings → Display → Tesla Network Probe / 车机网络�
 3. 停止并重新连接 CarPlay，让浏览器模式、分辨率、30 fps 和发送机音频设置生效。
 4. 让发送 iPhone 和特斯拉连接接收机的个人热点。
 5. 在接收机 Settings → Display 查看当前热点地址和 4 位数字配对码。
-6. 车机浏览器打开显示的 `http://实际热点IPv4:8080`，输入配对码并连接。
+6. 开启车机网络探测，确认 local_ready、port80 后，打开 `http://carplay.99-99-99-99.sslip.io/`，输入配对码。
 7. 手机保持在 Showcase 前台。首次配置和排障请停车完成。
 
-监听地址为接收机的 IPv4 接口。页面只接受本机 IPv4 Host 和同源 WebSocket；
-当前不接受 `.local` 名称或 IPv6 URL。如果热点地址还未出现，先启动 CarPlay，
+旧 8080 桥接服务只接受本机 IPv4 Host 和同源 WebSocket；标准端口网关接受本机 IPv4 或配置的域名，先校验公开 Origin，再重写固定 loopback 上游的 Host / Origin。
+当前不接受任意域名、`.local` 名称或 IPv6 URL。如果热点地址还未出现，先启动 CarPlay，
 然后重新打开设置页。普通入口不要照抄其他手机的 IP。兼容地址仅在车机网络探测实际显示 local_ready 时展示。
 
 浏览器模式在下次 CarPlay 连接时生效。关闭开关后同样重连，以恢复原版显示／音频配置。
-停止 CarPlay 后本地 HTTP 服务随网络 helper 退出。配对码存放在接收机私有文件
+停止 CarPlay 后 8080 桥接服务退出；独立探测 helper 在开关关闭或 App 退出后清理，运行时仍可打开配对和诊断页。配对码存放在接收机私有文件
 `/var/mobile/Library/Showcase/browser-token`，权限 0600；不会通过启动参数或普通日志输出。
 
 Browser2 会把旧版 32 位配对码迁移为随机四位数字（可含前导零），原码失效。
@@ -67,6 +69,7 @@ Browser2 会把旧版 32 位配对码迁移为随机四位数字（可含前导�
 
 | 文件 | 用途 |
 |---|---|
+| `source/browser_probe.m`, `source/browser_web_tls.m` | 标准端口、域名、固定 loopback 转发和可选 HTTPS / WSS |
 | `source/browser_bridge.m` | 非阻塞 HTTP/WS 服务、配对、流分代、有界队列、触摸状态与超时 |
 | `source/browser_settings.h` | 模式开关、私有配对码、热点地址枚举 |
 | `source/carplay_services.m` | 配置／解密帧分发、HID 输入回调、会话与前台状态 |
@@ -130,6 +133,8 @@ python3 tests/test_browser_bridge.py
 
 ```sh
 node tests/test_browser_e2e.cjs
+SHOWCASE_TEST_TLS=1 node tests/test_browser_e2e.cjs
+node tests/test_browser_web_tls.cjs
 ```
 
 使用独立临时 Chrome profile，通过 WebCodecs 生成合成 H.264，再走生产 WS/MSE
@@ -137,7 +142,7 @@ node tests/test_browser_e2e.cjs
 指定 Chrome 可执行路径，用标准 `NODE_PATH` 指定已有 Playwright 安装位置。
 测试不读取用户浏览器资料，不连接 iPhone，也不把视频上传到外部服务。
 
-2026-10-22 验证范围（Browser3 新增网络回归见实车测试指南）：
+2026-10-22 验证范围（Browser4 新增标准端口、TLS 和网络回归见实车测试指南）：
 
 - 修改后的 UI、桥接与服务通过 iOS arm64 语法检查，并编译链接出未签名可执行文件。
 - 核心播放器、macOS 服务端集成、真实 Chrome MSE／触摸端到端测试通过。
@@ -147,8 +152,8 @@ node tests/test_browser_e2e.cjs
 ## 硬件验收与已知边界
 
 先确认目标车机可访问热点宿主地址、支持对应 AVC profile 的 MSE 和 WebSocket。
-网络连接成功不代表所有车辆状态下都可播放。Browser3 的兼容地址是实验入口，
-仍可能被目标固件的地址／HTTP 策略拒绝；HTTPS 和 MSE 不兼容问题尚未解决。
+网络连接成功不代表所有车辆状态下都可播放。Browser4 的兼容地址是实验入口，
+仍可能被目标固件的地址／HTTP 策略拒绝；可配置 HTTPS 已实现，车机证书信任及 MSE 仍待实测。
 
 现场顺序：网页连通 → 停车连续画面 → 单指和长按 → 刷新／重连 → 发送机蓝牙音频。
 记录车型、固件、CarPlay 发送机系统、接收机越狱方式与连接状态。

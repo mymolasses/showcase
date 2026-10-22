@@ -8,21 +8,28 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const http = require('node:http');
+const net = require('node:net');
 const {spawn, execFileSync} = require('node:child_process');
 const {once} = require('node:events');
 const {chromium} = require('playwright');
 const root = path.resolve(__dirname, '..');
+const fixtureTLS = require('./browser_web_fixture.cjs');
+const useTLS = process.env.SHOWCASE_TEST_TLS === '1';
+const domain = 'carplay.showcase.test';
 const token = '0427'; // synthetic test-only credential
 
 (async () => {
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'showcase-browser-e2e-'));
-  let browser, server, helper;
+  let browser, server, helper, gateway;
+  const certificate = useTLS ? fixtureTLS(work, domain) : null;
   try {
     execFileSync('clang', ['-fobjc-arc', '-Wno-deprecated-declarations', '-framework', 'Foundation',
       path.join(root, 'source/browser_bridge.m'), path.join(root, 'tests/browser_bridge_harness.m'), '-o', path.join(work, 'bridge')]);
+    execFileSync('clang', ['-fobjc-arc', '-DSC_PROBE_TEST=1', '-Wno-deprecated-declarations', '-framework', 'Foundation', '-framework', 'Security',
+      path.join(root,'source/browser_probe.m'),path.join(root,'source/browser_network.c'),path.join(root,'source/browser_web_tls.m'),'-o',path.join(work,'gateway')]);
     server = http.createServer((_, res) => { res.end('<!doctype html><title>Synthetic AVC fixture</title>'); });
     server.listen(0, '127.0.0.1'); await once(server, 'listening');
-    browser = await chromium.launch({executablePath: process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', headless: true});
+    browser = await chromium.launch({executablePath: process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', headless: true, args: ['--no-proxy-server', ...(useTLS ? ['--host-resolver-rules=MAP '+domain+' 127.0.0.1', '--ignore-certificate-errors-spki-list='+certificate.spki] : [])]});
     const page = await browser.newPage({viewport: {width: 1280, height: 900}});
     await page.goto(`http://127.0.0.1:${server.address().port}`);
     const encoded = await page.evaluate(async () => {
@@ -60,6 +67,15 @@ const token = '0427'; // synthetic test-only credential
       while (!predicate()) { if (Date.now() > end) throw Error(`${label}\n${stderr}\n${output.slice(-500)}`); await new Promise(resolve => setTimeout(resolve, 30)); }
     };
     await until(() => output.includes('READY'), 'bridge startup');
+    const reserve = net.createServer(); reserve.listen(0,'127.0.0.1'); await once(reserve,'listening');
+    const frontPort = reserve.address().port; await new Promise(resolve => reserve.close(resolve));
+    const tlsReserve=net.createServer(); tlsReserve.listen(0,'127.0.0.1'); await once(tlsReserve,'listening');
+    const tlsPort=tlsReserve.address().port; await new Promise(resolve=>tlsReserve.close(resolve));
+    fs.writeFileSync(path.join(work,'browser-web.json'),JSON.stringify({testBackendPort:port, ...(useTLS ? {domain, identityPassword:certificate.password,testAnchor:certificate.root} : {})}));
+    const gatewayState = path.join(work,'web-state.json');
+    gateway=spawn(path.join(work,'gateway'),['--parent',String(process.pid),'--test-port',String(frontPort),'--test-state',gatewayState,...(useTLS ? ['--test-https-port',String(tlsPort)] : [])],{stdio:['ignore','pipe','pipe']});
+    gateway.stderr.on('data',bytes=>{stderr+=bytes.toString();});
+    await until(()=>fs.existsSync(gatewayState),'gateway startup');
     const pageErrors = [];
     let mediaConnections = 0, controls = 0;
     page.on('pageerror', error => pageErrors.push(error.message));
@@ -67,7 +83,7 @@ const token = '0427'; // synthetic test-only credential
       if (socket.url().endsWith('/media')) mediaConnections++;
       if (socket.url().endsWith('/control')) controls++;
     });
-    await page.goto(`http://127.0.0.1:${port}`);
+    await page.goto(useTLS ? `https://${domain}:${tlsPort}/` : `http://127.0.0.1:${frontPort}/`);
     // Wrong PIN must stop, rather than loop new WS connections forever.
     await page.fill('#token', '9999');
     await page.click('#pair button[type=submit]');
@@ -76,7 +92,7 @@ const token = '0427'; // synthetic test-only credential
     await page.click('#disconnect');
     await page.fill('#token', token);
     await page.click('#pair button[type=submit]');
-    await page.waitForFunction(() => { const v = document.querySelector('video'); return v.videoWidth === 1920 && v.currentTime > 0.1 && v.readyState >= 2; }, {timeout: 15000});
+    await page.waitForFunction(() => { const v = document.querySelector('video'); return v.videoWidth === 1920 && v.currentTime > 0.1 && v.readyState >= 2; }, null, {timeout: 15000});
     await until(() => output.includes('TOUCH 3'), 'browser control ownership');
     // Authenticated status polling must enable input after actual frames arrive.
     await page.waitForTimeout(1200);
@@ -108,7 +124,7 @@ const token = '0427'; // synthetic test-only credential
     assert.equal(await page.locator('#notice').isVisible(), false);
     await page.screenshot({path: path.join(work, 'browser.png')});
     await page.click('#reconnect');
-    await page.waitForFunction(() => document.querySelector('video').currentTime > 0.1 && document.querySelector('video').readyState >= 2, {timeout: 15000});
+    await page.waitForFunction(() => document.querySelector('video').currentTime > 0.1 && document.querySelector('video').readyState >= 2, null, {timeout: 15000});
     // Actual service loss: retain the last image, back off, recover new sockets.
     helper.stdin.write('q'); await once(helper, 'exit');
     await page.waitForFunction(() => document.querySelector('#state').textContent.includes('重试'));
@@ -116,19 +132,20 @@ const token = '0427'; // synthetic test-only credential
     helper = spawn(path.join(work, 'bridge'), [String(port), token, fixture, '1920x1080'], {stdio: ['pipe', 'pipe', 'pipe']});
     helper.stdout.on('data', bytes => { output += bytes.toString(); });
     helper.stderr.on('data', bytes => { stderr += bytes.toString(); });
-    await page.waitForFunction(() => document.querySelector('video').currentTime > 0.1 && document.querySelector('video').readyState >= 2, {timeout: 15000});
+    await page.waitForFunction(() => document.querySelector('video').currentTime > 0.1 && document.querySelector('video').readyState >= 2, null, {timeout: 15000});
     helper.stdin.write('b');
     await page.waitForFunction(() => document.querySelector('#notice').textContent.includes('前台'));
     helper.stdin.write('f');
-    await page.waitForFunction(() => document.querySelector('video').currentTime > 0.1 && document.querySelector('video').readyState >= 2, {timeout: 15000});
+    await page.waitForFunction(() => document.querySelector('video').currentTime > 0.1 && document.querySelector('video').readyState >= 2, null, {timeout: 15000});
     assert.deepEqual(pageErrors, []);
-    console.log('PASS: real Chrome 1080p MSE, PIN rejection, 12s repeated config stability, idle/gap resume, input, retry + retained frame after service loss, foreground reset');
+    console.log('PASS ('+(useTLS ? 'HTTPS/WSS' : 'HTTP/WS')+'): front door -> production WS -> Chrome 1080p MSE, PIN rejection, repeated config stability, idle resume, input, retry + retained frame, foreground reset');
     console.log('Synthetic screenshot:', path.join(work, 'browser.png'));
   } finally {
     if (helper && helper.exitCode === null) { helper.stdin.write('q'); await once(helper, 'exit'); }
+    if (gateway && gateway.exitCode === null) { gateway.kill('SIGTERM'); await once(gateway,'exit'); }
     if (server) server.close();
     if (browser) await browser.close();
     // Keep only the synthetic screenshot as visual evidence.
-    for (const name of ['bridge', 'avc.bin']) fs.rmSync(path.join(work, name), {force: true});
+    for (const name of fs.readdirSync(work)) if(name !== 'browser.png') fs.rmSync(path.join(work, name), {recursive:true,force: true});
   }
 })().catch(error => { console.error(error); process.exitCode = 1; });
