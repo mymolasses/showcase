@@ -37,11 +37,11 @@
       full('trun', 0, 0x701, u32(1), u32(offset), u32(duration), u32(frame.length), u32(key ? 0x02000000 : 0x01010000))));
     return join(moof(moof(0).length + 8), box('mdat', frame));
   }
-  function mapPoint(rect, width, height, x, y, clamp) {
+  function mapPoint(rect, width, height, x, y, clamp, fill = false) {
     if (!(rect.width > 0 && rect.height > 0 && width > 0 && height > 0)) return null;
     const scale = Math.min(rect.width / width, rect.height / height);
-    let px = (x - rect.left - (rect.width - width * scale) / 2) / scale;
-    let py = (y - rect.top - (rect.height - height * scale) / 2) / scale;
+    let px = fill ? (x - rect.left) * width / rect.width : (x - rect.left - (rect.width - width * scale) / 2) / scale;
+    let py = fill ? (y - rect.top) * height / rect.height : (y - rect.top - (rect.height - height * scale) / 2) / scale;
     if (!clamp && (px < 0 || px > width || py < 0 || py > height)) return null;
     px = Math.max(0, Math.min(width, px)); py = Math.max(0, Math.min(height, py));
     return {x: Math.round(px), y: Math.round(py)};
@@ -78,7 +78,8 @@
   }
   const $ = id => document.getElementById(id);
   const video = document.querySelector('video'), surface = $('surface'), poster = $('poster');
-  let token = '', media = null, control = null, reconnectTimer = null, desired = false, epoch = 0;
+  let media = null, control = null, reconnectTimer = null, desired = true, epoch = 0;
+  let fill = true;
   let config = null, player = null, pointer = null, displayed = false;
   let statusBusy = false, active = false, lastFrame = 0, lastKeyRequest = 0, retry = 0, failureTimes = [];
   const state = message => { $('state').textContent = message; };
@@ -125,6 +126,25 @@
     const source = new Source(), url = URL.createObjectURL(source);
     let buffer = null, closed = false, queue = [], queued = 0, waitingKey = true, failed = false;
     let previous = null, cursor = 0, sequence = 0, lastMicros = null, lastKey = 0, flushTimer = null;
+    let lastPosition = 0, progressedAt = performance.now(), appendedAt = 0;
+    const resume = () => {
+      if (closed || failed || !video.buffered.length) return;
+      const now = performance.now(), ranges = video.buffered;
+      const start = ranges.start(ranges.length - 1), end = ranges.end(ranges.length - 1);
+      if (Math.abs(video.currentTime - lastPosition) > 0.005) progressedAt = now;
+      // CarPlay sends sparse updates on static screens. Embedded Chromium can
+      // remain in HAVE_CURRENT_DATA after running into the previous live edge.
+      // Seek inside newly appended data even when lag is below the latency cap.
+      const stuck = now - progressedAt > 750 && appendedAt > progressedAt;
+      if (!video.seeking && (video.currentTime < start || end - video.currentTime > 0.65 || stuck)) {
+        // Leave several frames ahead so older decoders can leave buffering.
+        video.currentTime = Math.max(start, end - 0.15);
+        progressedAt = now;
+      }
+      lastPosition = video.currentTime;
+      video.playbackRate = 1;
+      if (video.paused) video.play().catch(() => { if (!closed) notice('请轻点画面以允许播放'); });
+    };
     const fail = message => {
       if (!closed && !failed) { failed = true; setTimeout(() => { if (!closed) recover(message); }, 300); }
     };
@@ -150,8 +170,9 @@
       URL.revokeObjectURL(url);
       try {
         buffer = source.addSourceBuffer(mime);
+        source.duration = Infinity;
         buffer.addEventListener('updateend', () => {
-          if (closed) return; pump(); video.play().catch(() => { if (!closed) notice('请点重连以允许播放'); });
+          if (closed) return; appendedAt = performance.now(); resume(); pump();
         });
         buffer.addEventListener('error', () => fail('视频解码失败'));
         const init = initMp4(info.avcc, info.width, info.height);
@@ -160,9 +181,7 @@
     }, {once: true});
     const timer = setInterval(() => {
       if (closed || failed || !buffer || !video.buffered.length) return;
-      const end = video.buffered.end(video.buffered.length - 1), lag = end - video.currentTime;
-      if (lag > 0.65) video.currentTime = Math.max(video.buffered.start(0), end - 0.15);
-      video.playbackRate = lag > 0.3 ? 1.08 : 1;
+      resume();
       const trim = Math.min(lastKey, video.currentTime - 8);
       if (!buffer.updating && !queue.length && trim > video.buffered.start(0) + 2)
         try { buffer.remove(0, trim); } catch (_) { /* next tick */ }
@@ -173,7 +192,8 @@
         const actualKey = checkFrame(bytes);
         if (key && !actualKey) throw Error('Invalid keyframe');
         if (!Number.isSafeInteger(micros) || micros < 0) throw Error('Invalid frame timestamp');
-        if (lastMicros !== null && micros <= lastMicros) return;
+        // Arrival order is decode order for the supported no-B-frame stream.
+        // Repeated/unusable sender PTS must not discard valid decoded pictures.
         const delta = lastMicros === null ? 3000 : Math.round((micros - lastMicros) * 0.09);
         clearTimeout(flushTimer);
         flush(delta > 0 && delta <= 22500 ? delta : 3000);
@@ -191,9 +211,7 @@
   async function readStatus() {
     const abort = new AbortController(), timeout = setTimeout(() => abort.abort(), 4000);
     try {
-      const response = await fetch('/status', {headers: {'X-Showcase-Token': token}, cache: 'no-store', signal: abort.signal});
-      if (response.status === 403) throw Object.assign(Error('四位配对码不正确，请点断开后重新输入'), {permanent: true});
-      if (response.status === 429) throw Object.assign(Error('配对尝试过多，请等 30 秒后重连'), {permanent: true});
+      const response = await fetch('/status', {cache: 'no-store', signal: abort.signal});
       if (!response.ok) throw Error('接收机状态暂时不可用');
       return await response.json();
     } finally { clearTimeout(timeout); }
@@ -217,9 +235,9 @@
       if (error.permanent) stop(error.message); else scheduleReconnect('接收机暂时不可达');
       return;
     }
-    const endpoint = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host, protocol = 'showcase.' + token;
-    control = new WebSocket(endpoint + '/control', protocol);
-    media = new WebSocket(endpoint + '/media', protocol); media.binaryType = 'arraybuffer';
+    const endpoint = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
+    control = new WebSocket(endpoint + '/control');
+    media = new WebSocket(endpoint + '/media'); media.binaryType = 'arraybuffer';
     control.onopen = () => { if (current === epoch) { lastKeyRequest = -Infinity; requestKey(); } };
     media.onmessage = event => {
       if (current !== epoch || !(event.data instanceof ArrayBuffer)) return;
@@ -255,9 +273,10 @@
   });
   video.addEventListener('error', () => { if (player) recover('视频播放错误'); });
   function point(event, clamp) {
-    return config && mapPoint(surface.getBoundingClientRect(), config.width, config.height, event.clientX, event.clientY, clamp);
+    return config && mapPoint(surface.getBoundingClientRect(), config.width, config.height, event.clientX, event.clientY, clamp, fill);
   }
   surface.addEventListener('pointerdown', event => {
+    video.play().catch(() => {});
     if (!active || !displayed || pointer !== null || event.pointerType === 'mouse' && event.button !== 0) return;
     const p = point(event, false); if (!p) return;
     event.preventDefault();
@@ -304,20 +323,18 @@
       }
     } finally { statusBusy = false; }
   }, 1500);
-  $('pair').onsubmit = event => {
-    event.preventDefault(); const value = $('token').value.trim();
-    if (!/^[0-9]{4}$/.test(value)) { state('请输入四位数字配对码'); return; }
-    token = value; $('pair').hidden = true; surface.hidden = false;
-    $('reconnect').hidden = $('disconnect').hidden = false;
-    desired = true; retry = 0; failureTimes = []; lastKeyRequest = -Infinity; connect();
-  };
   $('reconnect').onclick = () => { desired = true; retry = 0; failureTimes = []; connect(); };
   $('disconnect').onclick = () => {
-    desired = false; closeSockets(); token = ''; $('token').value = ''; poster.hidden = true;
-    surface.hidden = true; $('pair').hidden = false; $('reconnect').hidden = $('disconnect').hidden = true; state('未连接');
+    desired = false; closeSockets(); state('已断开，点重连恢复'); notice('已断开');
   };
+  $('fit').onclick = () => {
+    release(); fill = !fill; document.body.classList.toggle('contain', !fill);
+    $('fit').textContent = fill ? '显示：填满' : '显示：等比';
+  };
+  $('menu').onclick = () => { const bar = $('toolbar'); bar.hidden = !bar.hidden; };
   $('fullscreen').onclick = () => {
     const action = document.fullscreenElement ? document.exitFullscreen?.() : document.documentElement.requestFullscreen?.();
     action?.catch(() => state('请使用车机浏览器菜单调整窗口'));
   };
+  connect();
 })();

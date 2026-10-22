@@ -10,7 +10,7 @@ typedef void (*ShowcaseBrowserResync)(void);
 
 /* Foreground prototype. Media is copied into bounded queues; these calls never
  * write to a browser socket on the CarPlay receiver thread. */
-bool showcase_browser_start(uint16_t port, const char *token,
+bool showcase_browser_start(uint16_t port,
                             ShowcaseBrowserTouch touch,
                             ShowcaseBrowserResync resync);
 void showcase_browser_stop(void);

@@ -4682,10 +4682,6 @@ static pid_t reusable_baa_broker(void) {
     BOOL rightHandDrive = [[NSUserDefaults standardUserDefaults]
         boolForKey:RIGHT_HAND_DRIVE_KEY];
     BOOL browserOutput = [[NSUserDefaults standardUserDefaults] boolForKey:BROWSER_OUTPUT_KEY];
-    if (browserOutput && !showcase_browser_token(YES)) {
-        [self failWith:@"Unable to create the browser pairing code."];
-        return;
-    }
     CarPlayDisplayProfile display =
         preferred_carplay_display_profile();
     uint16_t displayWidth = display.width;
@@ -7328,22 +7324,16 @@ static BOOL g_settings_hardware_loading = NO;
             subtitle:@"Stop CarPlay, then Start CarPlay to apply changes. Foreground only."
             on:[d boolForKey:BROWSER_OUTPUT_KEY] width:w changed:^(BOOL on) {
                 setter(BROWSER_OUTPUT_KEY, on);
-                if (on) showcase_browser_token(YES);
                 [weakSelf.appDelegate renderState];
                 dispatch_async(dispatch_get_main_queue(), ^{ [weakSelf render]; });
             }];
         [card addRow:browser height:browser.bounds.size.height];
     }];
     if ([d boolForKey:BROWSER_OUTPUT_KEY]) {
-        NSString *code = showcase_browser_token(YES) ?: @"Unavailable";
-        NSString *details = [NSString stringWithFormat:@"Hotspot entry / 热点入口（启动会话后生效）:\n%@\n\n4-digit PIN / 四位配对码:\n%@\n\nKeep Showcase in the foreground. Audio stays on the sending iPhone.",
-            showcase_browser_addresses(), code];
+        NSString *details = [NSString stringWithFormat:@"Hotspot entry / 热点入口（启动会话后生效）:\n%@\n\n无需配对码，浏览器访问即可打开。\n\nKeep Showcase in the foreground. Audio stays on the sending iPhone.",
+            showcase_browser_addresses()];
         [b labelText:details font:[UIFont monospacedDigitSystemFontOfSize:14 weight:UIFontWeightRegular]
             alpha:0.8 inset:16 gapAfter:16 color:nil];
-        [b card:^(SettingsCard *card) {
-            [card addRow:[self actionRow:@"Copy Browser Pairing Code / 复制配对码"
-                color:nil width:w enabled:YES action:^{ [UIPasteboard generalPasteboard].string = code; }] height:52];
-        }];
         NSInteger height = [d integerForKey:BROWSER_QUALITY_KEY];
         NSInteger quality = height == 720 ? 0 : height == 900 ? 1 : 2;
         [b card:^(SettingsCard *card) {

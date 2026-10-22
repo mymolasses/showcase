@@ -31,3 +31,6 @@ assert.equal(mapPoint(rect, 1280, 720, 510, 30, false), null);
 assert.deepEqual(mapPoint(rect, 1280, 720, -10, 2000, true), {x: 0, y: 720});
 assert.equal(mapPoint({...rect, width: 0}, 1280, 720, 0, 0, false), null);
 console.log('PASS: MP4 initialization, sample offsets, 64-bit time, AVC validation/B-frame refusal, letterbox touch mapping');
+
+assert.deepEqual(mapPoint(rect, 1280, 720, 510, 30, false, true), {x: 640, y: 7});
+assert.deepEqual(mapPoint(rect, 1280, 720, 10, 1020, false, true), {x: 0, y: 720});

@@ -48,14 +48,12 @@ static bool running, active, wantKey;
 static int listener = -1;
 static uint16_t listenPort, videoWidth, videoHeight;
 static uint32_t generation;
-static uint64_t firstTime, lastTime;
+static uint64_t lastTime, timelineMicros, receivedFrames, timestampFallbacks;
+static double lastArrival;
 static bool haveTime;
 static double lastFrameAt, lastKeyAt;
-static NSString *pairToken;
 static NSData *configuration;
 static NSData *decoderConfiguration;
-static unsigned authFailures;
-static double authWindow;
 static uint64_t congestionRecoveries;
 static NSMutableArray<SCBrowserClient *> *clients;
 static ShowcaseBrowserTouch touchCallback;
@@ -136,13 +134,6 @@ static bool local_authority(NSString *host) {
     }
     return found;
 }
-static bool secret_equal(NSString *a, NSString *b) {
-    NSData *x = [a dataUsingEncoding:NSUTF8StringEncoding], *y = [b dataUsingEncoding:NSUTF8StringEncoding];
-    if (!x || x.length != y.length) return false;
-    const uint8_t *p = x.bytes, *q = y.bytes; uint8_t difference = 0;
-    for (size_t i = 0; i < x.length; i++) difference |= p[i] ^ q[i];
-    return difference == 0;
-}
 static void handle_http(SCBrowserClient *c) {
     NSData *end = [@"\r\n\r\n" dataUsingEncoding:NSUTF8StringEncoding];
     NSRange boundary = [c.input rangeOfData:end options:0 range:NSMakeRange(0, c.input.length)];
@@ -169,21 +160,6 @@ static void handle_http(SCBrowserClient *c) {
             [NSData dataWithBytes:asset length:strlen(asset)]); return;
     }
     int role = [path isEqual:@"/media"] ? 1 : [path isEqual:@"/control"] ? 2 : 0;
-    if ([path isEqual:@"/status"] || role) {
-        double now = browser_now();
-        if (now - authWindow >= 30) { authWindow = now; authFailures = 0; }
-        if (authFailures >= 5) {
-            http_reply(c, 429, @"text/plain", [@"Too many attempts; wait 30 seconds" dataUsingEncoding:NSUTF8StringEncoding]);
-            return;
-        }
-        NSString *supplied = role ? headers[@"sec-websocket-protocol"] : headers[@"x-showcase-token"];
-        NSString *expected = role ? [@"showcase." stringByAppendingString:pairToken] : pairToken;
-        if (!secret_equal(supplied, expected)) {
-            authFailures++;
-            http_reply(c, 403, @"text/plain", [@"Pairing required" dataUsingEncoding:NSUTF8StringEncoding]);
-            return;
-        }
-    }
     if ([path isEqual:@"/status"]) {
         unsigned viewers = 0, controllers = 0; size_t queued = 0;
         for (SCBrowserClient *other in clients) {
@@ -192,12 +168,11 @@ static void handle_http(SCBrowserClient *c) {
         }
         NSDictionary *state = @{@"active": @(active), @"configured": @(configuration != nil),
             @"width": @(videoWidth), @"height": @(videoHeight), @"generation": @(generation),
-            @"version": @"Browser4", @"viewers": @(viewers), @"controllers": @(controllers),
+            @"version": @"Browser5", @"receivedFrames": @(receivedFrames), @"timestampFallbacks": @(timestampFallbacks), @"viewers": @(viewers), @"controllers": @(controllers),
             @"mediaQueueBytes": @(queued), @"congestionRecoveries": @(congestionRecoveries),
             @"frameAgeMs": @(lastFrameAt ? (browser_now() - lastFrameAt) * 1000 : -1)};
         http_reply(c, 200, @"application/json", [NSJSONSerialization dataWithJSONObject:state options:0 error:NULL]); return;
     }
-    NSString *protocol = [@"showcase." stringByAppendingString:pairToken];
     NSString *origin = [@"http://" stringByAppendingString:headers[@"host"]];
     NSData *key = [[NSData alloc] initWithBase64EncodedString:headers[@"sec-websocket-key"] ?: @"" options:0];
     NSString *connection = [headers[@"connection"] lowercaseString];
@@ -207,8 +182,8 @@ static void handle_http(SCBrowserClient *c) {
         if ([[value stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet] isEqual:@"upgrade"]) upgrade = true;
     if (!role || !upgrade || ![[headers[@"upgrade"] lowercaseString] isEqual:@"websocket"] ||
         ![headers[@"sec-websocket-version"] isEqual:@"13"] || key.length != 16 ||
-        ![headers[@"origin"] isEqual:origin] || !secret_equal(headers[@"sec-websocket-protocol"], protocol)) {
-        http_reply(c, 403, @"text/plain", [@"Pairing required" dataUsingEncoding:NSUTF8StringEncoding]); return;
+        ![headers[@"origin"] isEqual:origin]) {
+        http_reply(c, 403, @"text/plain", [@"Same-origin WebSocket required" dataUsingEncoding:NSUTF8StringEncoding]); return;
     }
     for (SCBrowserClient *other in clients) if (other != c && other.role == role) {
         http_reply(c, 409, @"text/plain", [@"One viewer/controller at a time" dataUsingEncoding:NSUTF8StringEncoding]); return;
@@ -217,7 +192,7 @@ static void handle_http(SCBrowserClient *c) {
     NSData *raw = [salted dataUsingEncoding:NSUTF8StringEncoding];
     uint8_t digest[CC_SHA1_DIGEST_LENGTH]; CC_SHA1(raw.bytes, (CC_LONG)raw.length, digest);
     NSString *accept = [[NSData dataWithBytes:digest length:sizeof(digest)] base64EncodedStringWithOptions:0];
-    NSString *reply = [NSString stringWithFormat:@"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %@\r\nSec-WebSocket-Protocol: %@\r\n\r\n", accept, protocol];
+    NSString *reply = [NSString stringWithFormat:@"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %@\r\n\r\n", accept];
     enqueue(c, [reply dataUsingEncoding:NSUTF8StringEncoding]);
     c.upgradePending = true;
     c.role = role; c.needsKey = true;
@@ -359,9 +334,9 @@ static void *browser_loop(void *unused) {
     return NULL;
 }
 
-bool showcase_browser_start(uint16_t port, const char *token, ShowcaseBrowserTouch touch,
+bool showcase_browser_start(uint16_t port, ShowcaseBrowserTouch touch,
                             ShowcaseBrowserResync resync) {
-    if (!port || !token || strlen(token) != 4 || strspn(token, "0123456789") != 4) return false;
+    if (!port) return false;
     pthread_mutex_lock(&browserLock);
     if (running) { pthread_mutex_unlock(&browserLock); return false; }
     listener = socket(AF_INET, SOCK_STREAM, 0);
@@ -373,10 +348,10 @@ bool showcase_browser_start(uint16_t port, const char *token, ShowcaseBrowserTou
         pthread_mutex_unlock(&browserLock); return false;
     }
     fcntl(listener, F_SETFL, O_NONBLOCK);
-    listenPort = port; pairToken = [NSString stringWithUTF8String:token];
+    listenPort = port;
     touchCallback = touch; resyncCallback = resync;
     clients = [NSMutableArray array]; active = true; running = true;
-    authFailures = 0; authWindow = browser_now(); congestionRecoveries = 0;
+    receivedFrames = timestampFallbacks = congestionRecoveries = 0;
     decoderConfiguration = nil;
     invalidate_stream();
     int error = pthread_create(&browserThread, NULL, browser_loop, NULL);
@@ -392,7 +367,7 @@ void showcase_browser_stop(void) {
     pthread_join(browserThread, NULL);
     pthread_mutex_lock(&browserLock);
     for (SCBrowserClient *c in [clients copy]) drop_client(c);
-    close(listener); listener = -1; clients = nil; configuration = nil; decoderConfiguration = nil; pairToken = nil;
+    close(listener); listener = -1; clients = nil; configuration = nil; decoderConfiguration = nil;
     pthread_mutex_unlock(&browserLock);
 }
 void showcase_browser_set_active(bool value) {
@@ -455,17 +430,26 @@ void showcase_browser_frame(uint64_t timestamp, bool key, const uint8_t *bytes, 
     if (!running || !active || !configuration) { pthread_mutex_unlock(&browserLock); return; }
     bool watching = false;
     for (SCBrowserClient *c in clients) if (c.role == 1) watching = true;
-    lastFrameAt = browser_now();
+    lastFrameAt = browser_now(); receivedFrames++;
     if (!watching) { pthread_mutex_unlock(&browserLock); return; }
-    if (!timestamp) timestamp = (uint64_t)(browser_now() * 4294967296.0);
-    if (haveTime && timestamp <= lastTime) {
-        /* This prototype requires a low-delay stream without B-frame reorder.
-         * Refuse a non-monotonic timeline instead of producing corrupt MP4. */
-        wantKey = true; pthread_mutex_unlock(&browserLock); return;
-    }
-    if (!haveTime) { firstTime = timestamp; haveTime = true; }
-    lastTime = timestamp; lastFrameAt = browser_now();
-    uint64_t micros = (uint64_t)((long double)(timestamp - firstTime) * 1000000.0L / 4294967296.0L);
+    double arrival = browser_now();
+    uint64_t step = 0;
+    if (haveTime) {
+        if (timestamp && lastTime && timestamp > lastTime)
+            step = (uint64_t)((long double)(timestamp - lastTime) * 1000000.0L / 4294967296.0L);
+        if (!step || step > 250000) {
+            /* Some senders don't supply usable presentation times. Dropping
+             * them froze the browser while the native renderer kept working.
+             * Decode order is preserved; B slices are rejected by the player. */
+            double elapsed = (arrival - lastArrival) * 1000000.0;
+            step = elapsed > 0 && elapsed <= 250000 ? (uint64_t)elapsed : 33333;
+            if (!step) step = 1;
+            timestampFallbacks++;
+        }
+        timelineMicros += step;
+    } else { timelineMicros = 0; haveTime = true; }
+    lastTime = timestamp; lastArrival = arrival;
+    uint64_t micros = timelineMicros;
     uint8_t header[14] = {2}; put_be(header + 1, generation, 4); header[5] = key ? 1 : 0;
     put_be(header + 6, micros, 8);
     NSMutableData *payload = [NSMutableData dataWithBytes:header length:sizeof(header)];

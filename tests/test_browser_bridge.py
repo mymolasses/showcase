@@ -19,7 +19,6 @@ import threading
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-TOKEN = '0427'  # test-only token
 
 
 def fixture(path):
@@ -29,14 +28,14 @@ def fixture(path):
 
 
 class WS:
-    def __init__(self, port, route, token=TOKEN, origin=None, expected=101):
+    def __init__(self, port, route, origin=None, expected=101):
         self.sock = socket.create_connection(('127.0.0.1', port), timeout=3)
         self.buffer = b''
         key = base64.b64encode(os.urandom(16)).decode()
         host = f'127.0.0.1:{port}'
         request = (f'GET {route} HTTP/1.1\r\nHost: {host}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n'
                    f'Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: {key}\r\nOrigin: {origin or "http://" + host}\r\n'
-                   f'Sec-WebSocket-Protocol: showcase.{token}\r\n\r\n')
+                   '\r\n')
         self.sock.sendall(request.encode())
         while b'\r\n\r\n' not in self.buffer:
             data = self.sock.recv(65536)
@@ -89,7 +88,7 @@ def main():
         with socket.socket() as reservation:
             reservation.bind(('127.0.0.1', 0))
             port = reservation.getsockname()[1]
-        process = subprocess.Popen([str(work / 'bridge'), str(port), TOKEN, str(work / 'fixture.bin'), '320x180'],
+        process = subprocess.Popen([str(work / 'bridge'), str(port), str(work / 'fixture.bin'), '320x180'],
                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
         events = queue.Queue()
         def reader():
@@ -109,14 +108,13 @@ def main():
             time.sleep(0.1)
         def status():
             connection = http.client.HTTPConnection('127.0.0.1', port, timeout=3)
-            connection.request('GET', '/status', headers={'X-Showcase-Token': TOKEN})
+            connection.request('GET', '/status', headers={})
             response = connection.getresponse(); assert response.status == 200
             result = json.loads(response.read()); connection.close(); return result
         sockets = []
         try:
             wait_event('READY')
-            for token, origin in [('bad', None), (TOKEN, 'http://attacker.invalid')]:
-                ws = WS(port, '/control', token, origin, expected=403); ws.close()
+            ws = WS(port, '/control', origin='http://attacker.invalid', expected=403); ws.close()
             connection = http.client.HTTPConnection('127.0.0.1', port)
             connection.request('GET', '/', headers={'Host': f'attacker.invalid:{port}'})
             assert connection.getresponse().status == 400; connection.close()
@@ -139,6 +137,20 @@ def main():
                     assert packet[5] == 1 and packet[14:] == bytes.fromhex('0000000265b8')
                     times.append(struct.unpack('!Q', packet[6:14])[0])
             assert 33000 <= times[1] - times[0] <= 34000, times
+            for mode in ('d', 'z', 'n'):
+                previous = status()
+                command(mode)
+                time.sleep(0.2)
+                current = status()
+                assert current['receivedFrames'] > previous['receivedFrames'] + 2
+                if mode != 'n':
+                    assert current['timestampFallbacks'] > previous['timestampFallbacks']
+                sample_times = []
+                while len(sample_times) < 5:
+                    packet = media.receive()
+                    if packet[0] == 2:
+                        sample_times.append(struct.unpack('!Q', packet[6:14])[0])
+                assert all(b > a for a, b in zip(sample_times, sample_times[1:])), sample_times
             def touch(phase, x=80, y=90, stream=generation):
                 control.send(dict(type='touch', phase=phase, x=x, y=y, generation=stream))
             touch(0); assert wait_event('TOUCH 0') == 'TOUCH 0 80 90'
@@ -166,11 +178,7 @@ def main():
             malformed = WS(port, '/control'); wait_event('TOUCH 3')
             malformed.send(dict(type='touch', phase=True, x=1, y=1, generation=state['generation']))
             assert malformed.sock.recv(1) == b''; malformed.close()
-            # PIN failures share a bounded budget across HTTP and WS routes.
-            for _ in range(4):
-                bad = WS(port, '/control', '9999', expected=403); bad.close()
-            blocked = WS(port, '/control', TOKEN, expected=429); blocked.close()
-            print('PASS: four-digit PIN + throttling, duplicate AVC config, origin/host, one controller, AVC time, touch, deadman, foreground reset, stale generation')
+            print('PASS: passwordless HTTP/WS, duplicate AVC config, origin/host, one controller, AVC time, touch, deadman, foreground reset, stale generation')
         finally:
             for ws in sockets:
                 ws.close()

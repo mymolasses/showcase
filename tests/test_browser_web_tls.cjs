@@ -16,13 +16,12 @@ function frame(bytes,opcode=2){const b=Buffer.from(bytes),h=Buffer.alloc(b.lengt
  try{
   const cert=fixture(work,domain),httpPort=await port(),httpsPort=await port(),fallback=await port();
   const large=crypto.randomBytes(4*1024*1024),upgrades=[];
-  backend=http.createServer((req,res)=>{assert.equal(req.headers.host,'127.0.0.1:'+backend.address().port);res.writeHead(req.headers['x-showcase-token']==='0427'?200:403,{'content-type':'application/json'});res.end(JSON.stringify({active:true,configured:true,viewers:0,controllers:0}));});
+  backend=http.createServer((req,res)=>{assert.equal(req.headers.host,'127.0.0.1:'+backend.address().port);res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({active:true,configured:true,viewers:0,controllers:0}));});
   backend.on('upgrade',(req,socket)=>{
    backendSockets.add(socket);socket.on('close',()=>backendSockets.delete(socket));
    assert.equal(req.headers.origin,'http://127.0.0.1:'+backend.address().port);upgrades.push(req.url);
-   if(req.headers['sec-websocket-protocol']!=='showcase.0427'){socket.end('HTTP/1.1 403 Rejected\r\nConnection: close\r\n\r\n');return;}
    const accept=crypto.createHash('sha1').update(req.headers['sec-websocket-key']+'258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
-   socket.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: '+accept+'\r\nSec-WebSocket-Protocol: showcase.0427\r\n\r\n');
+   socket.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: '+accept+'\r\n\r\n');
    socket.on('error',()=>{});
    if(req.url==='/media')socket.write(frame(large));
    else socket.on('data',data=>{
@@ -43,7 +42,7 @@ function frame(bytes,opcode=2){const b=Buffer.from(bytes),h=Buffer.alloc(b.lengt
   start();await until(()=>fs.existsSync(state),'startup');
   assert.equal(JSON.parse(fs.readFileSync(state)).httpsReady,true,stderr);
   const request=(pathname,origin)=>new Promise((resolve,reject)=>{
-   const headers={host:domain+':'+httpsPort,'X-Showcase-Token':'0427'};if(origin)headers.Origin=origin;
+   const headers={host:domain+':'+httpsPort};if(origin)headers.Origin=origin;
    https.get({host:'127.0.0.1',port:httpsPort,servername:domain,ca:cert.ca,path:pathname,headers},r=>{
     let data=[];r.on('data',b=>data.push(b));r.on('end',()=>resolve({status:r.statusCode,body:Buffer.concat(data).toString()}));
    }).on('error',reject);
@@ -58,7 +57,7 @@ function frame(bytes,opcode=2){const b=Buffer.from(bytes),h=Buffer.alloc(b.lengt
   const page=await browser.newPage();await page.goto('https://'+domain+':'+httpsPort+'/');
   assert.equal(await page.locator('#pair').count(),1);
   const result=await page.evaluate(async()=>{
-   function receive(path,send){return new Promise((resolve,reject)=>{const ws=new WebSocket('wss://'+location.host+path,'showcase.0427');ws.binaryType='arraybuffer';
+   function receive(path,send){return new Promise((resolve,reject)=>{const ws=new WebSocket('wss://'+location.host+path);ws.binaryType='arraybuffer';
     ws.onerror=()=>reject(Error('WSS failed'));ws.onopen=()=>{if(send)ws.send(JSON.stringify({type:'ping'}));};ws.onmessage=e=>{ws.close();resolve(e.data);};});}
    const [ack,data]=await Promise.all([receive('/control',true),receive('/media',false)]);
    const digest=await crypto.subtle.digest('SHA-256',data);return {ack,length:data.byteLength,digest:[...new Uint8Array(digest)].map(n=>n.toString(16).padStart(2,'0')).join('')};

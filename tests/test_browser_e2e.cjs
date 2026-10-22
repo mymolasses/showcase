@@ -16,7 +16,6 @@ const root = path.resolve(__dirname, '..');
 const fixtureTLS = require('./browser_web_fixture.cjs');
 const useTLS = process.env.SHOWCASE_TEST_TLS === '1';
 const domain = 'carplay.showcase.test';
-const token = '0427'; // synthetic test-only credential
 
 (async () => {
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'showcase-browser-e2e-'));
@@ -58,7 +57,7 @@ const token = '0427'; // synthetic test-only credential
     fs.writeFileSync(fixture, Buffer.concat([record(encoded.description), ...encoded.frames.map(record)]));
     const port = server.address().port;
     await new Promise(resolve => server.close(resolve)); server = null;
-    helper = spawn(path.join(work, 'bridge'), [String(port), token, fixture, '1920x1080'], {stdio: ['pipe', 'pipe', 'pipe']});
+    helper = spawn(path.join(work, 'bridge'), [String(port), fixture, '1920x1080'], {stdio: ['pipe', 'pipe', 'pipe']});
     let output = '', stderr = '';
     helper.stdout.on('data', bytes => { output += bytes.toString(); });
     helper.stderr.on('data', bytes => { stderr += bytes.toString(); });
@@ -84,18 +83,13 @@ const token = '0427'; // synthetic test-only credential
       if (socket.url().endsWith('/control')) controls++;
     });
     await page.goto(useTLS ? `https://${domain}:${tlsPort}/` : `http://127.0.0.1:${frontPort}/`);
-    // Wrong PIN must stop, rather than loop new WS connections forever.
-    await page.fill('#token', '9999');
-    await page.click('#pair button[type=submit]');
-    await page.waitForFunction(() => document.querySelector('#state').textContent.includes('不正确'));
-    assert.equal(mediaConnections, 0);
-    await page.click('#disconnect');
-    await page.fill('#token', token);
-    await page.click('#pair button[type=submit]');
+    assert.equal(await page.locator('input').count(), 0);
     await page.waitForFunction(() => { const v = document.querySelector('video'); return v.videoWidth === 1920 && v.currentTime > 0.1 && v.readyState >= 2; }, null, {timeout: 15000});
     await until(() => output.includes('TOUCH 3'), 'browser control ownership');
-    // Authenticated status polling must enable input after actual frames arrive.
+    // Status polling must enable input after actual frames arrive.
     await page.waitForTimeout(1200);
+    await page.click('#menu');
+    await page.click('#fit'); // verify original aspect-ratio mapping too
     const rect = await page.locator('#surface').boundingBox();
     const before = output.match(/TOUCH 0 /g)?.length || 0;
     await page.mouse.click(rect.x + rect.width / 2, rect.y + 3); // letterbox
@@ -129,7 +123,7 @@ const token = '0427'; // synthetic test-only credential
     helper.stdin.write('q'); await once(helper, 'exit');
     await page.waitForFunction(() => document.querySelector('#state').textContent.includes('重试'));
     assert.equal(await page.locator('#poster').isVisible(), true);
-    helper = spawn(path.join(work, 'bridge'), [String(port), token, fixture, '1920x1080'], {stdio: ['pipe', 'pipe', 'pipe']});
+    helper = spawn(path.join(work, 'bridge'), [String(port), fixture, '1920x1080'], {stdio: ['pipe', 'pipe', 'pipe']});
     helper.stdout.on('data', bytes => { output += bytes.toString(); });
     helper.stderr.on('data', bytes => { stderr += bytes.toString(); });
     await page.waitForFunction(() => document.querySelector('video').currentTime > 0.1 && document.querySelector('video').readyState >= 2, null, {timeout: 15000});
@@ -138,7 +132,7 @@ const token = '0427'; // synthetic test-only credential
     helper.stdin.write('f');
     await page.waitForFunction(() => document.querySelector('video').currentTime > 0.1 && document.querySelector('video').readyState >= 2, null, {timeout: 15000});
     assert.deepEqual(pageErrors, []);
-    console.log('PASS ('+(useTLS ? 'HTTPS/WSS' : 'HTTP/WS')+'): front door -> production WS -> Chrome 1080p MSE, PIN rejection, repeated config stability, idle resume, input, retry + retained frame, foreground reset');
+    console.log('PASS ('+(useTLS ? 'HTTPS/WSS' : 'HTTP/WS')+'): front door -> production WS -> Chrome 1080p MSE, passwordless entry, repeated config stability, idle resume, input, retry + retained frame, foreground reset');
     console.log('Synthetic screenshot:', path.join(work, 'browser.png'));
   } finally {
     if (helper && helper.exitCode === null) { helper.stdin.write('q'); await once(helper, 'exit'); }

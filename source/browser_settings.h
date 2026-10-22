@@ -7,7 +7,6 @@
 
 #define BROWSER_OUTPUT_KEY @"browserOutputEnabled"
 #define BROWSER_QUALITY_KEY @"browserResolutionHeight"
-#define BROWSER_TOKEN_PATH @"/var/mobile/Library/Showcase/browser-token"
 #define BROWSER_PORT 8080
 #define BROWSER_PROBE_KEY @"browserNetworkProbeEnabled"
 #define BROWSER_PROBE_STATE @"/var/mobile/Library/Showcase/network-probe.json"
@@ -20,26 +19,6 @@ static BOOL showcase_web_domain_valid(NSString *domain) {
     if (![domain isKindOfClass:NSString.class] || domain.length > 253) return NO;
     NSString *pattern = @"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])$";
     return [domain rangeOfString:pattern options:NSRegularExpressionSearch].location != NSNotFound;
-}
-
-/* Shared by the UI and service; the token is never placed in argv or logs. */
-static NSString *showcase_browser_token(BOOL create) {
-    NSString *token = [[NSString stringWithContentsOfFile:BROWSER_TOKEN_PATH
-        encoding:NSUTF8StringEncoding error:NULL]
-        stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
-    NSCharacterSet *digits = [NSCharacterSet characterSetWithCharactersInString:@"0123456789"];
-    if (token.length == 4 && [token rangeOfCharacterFromSet:digits.invertedSet].location == NSNotFound) {
-        chmod(BROWSER_TOKEN_PATH.fileSystemRepresentation, 0600);
-        return token;
-    }
-    if (!create) return nil;
-    NSString *value = [NSString stringWithFormat:@"%04u", arc4random_uniform(10000)];
-    [[NSFileManager defaultManager] createDirectoryAtPath:BROWSER_TOKEN_PATH.stringByDeletingLastPathComponent
-        withIntermediateDirectories:YES attributes:@{NSFilePosixPermissions: @0700} error:NULL];
-    NSData *bytes = [value dataUsingEncoding:NSUTF8StringEncoding];
-    if (![[NSFileManager defaultManager] createFileAtPath:BROWSER_TOKEN_PATH contents:bytes
-        attributes:@{NSFilePosixPermissions: @0600}]) return nil;
-    return value;
 }
 
 static NSString *showcase_browser_addresses(void) {

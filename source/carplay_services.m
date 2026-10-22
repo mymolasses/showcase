@@ -4118,7 +4118,7 @@ static void *screen_thread_func(void *arg) {
                 bool isIDR = (header[5] & 0x10) != 0 ||
                     h264_frame_contains_idr(body, ctLen);
                 if (g_app_video_enabled) {
-                    if (g_browser_enabled) showcase_browser_frame(ntpTimestamp, isIDR, body, ctLen);
+                    if (g_browser_enabled) showcase_browser_frame(g_screen_respect_timestamps ? ntpTimestamp : 0, isIDR, body, ctLen);
                     int pendingBytes = 0;
                     if (ioctl(clientFd, FIONREAD, &pendingBytes) != 0 ||
                         pendingBytes < 0)
@@ -6217,13 +6217,12 @@ int main(int argc, char *argv[]) {
     }
 
     if (g_browser_enabled) {
-        NSString *token = showcase_browser_token(NO);
-        if (!token || !showcase_browser_start(BROWSER_PORT, token.UTF8String,
+        if (!showcase_browser_start(BROWSER_PORT,
                 queue_touch_report, browser_request_keyframe)) {
             fprintf(stderr, "[BROWSER] Cannot start local browser service on port %d\n", BROWSER_PORT);
             return 1;
         }
-        printf("[BROWSER] Foreground prototype listening on port %d; pairing code is in Settings > Display\n", BROWSER_PORT);
+        printf("[BROWSER] Foreground prototype listening on port %d; open the hotspot entry in a browser\n", BROWSER_PORT);
         /* The UI explicitly confirms foreground state over the existing IPC. */
         showcase_browser_set_active(false);
     }

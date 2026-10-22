@@ -2,6 +2,7 @@
  * Run the production bridge on macOS with synthetic/recorded AVC access units.
  * Fixture: BE32 avccLength, avcc, then repeated [BE32 length, AVCC frame].
  * stdin: b=background, f=foreground/new config, r=repeat same config, t=timestamp gap,
+ * d=repeated timestamp, z=zero timestamp, n=normal timestamp,
  * s=static screen (no new frames), c=continue frames, q=quit.
  */
 #import <Foundation/Foundation.h>
@@ -17,9 +18,9 @@ static void resync(void) { printf("KEY\n"); fflush(stdout); }
 static uint32_t be32(const uint8_t *p) { return ((uint32_t)p[0]<<24)|((uint32_t)p[1]<<16)|((uint32_t)p[2]<<8)|p[3]; }
 
 int main(int argc, char **argv) { @autoreleasepool {
-    if (argc != 5) return 2;
+    if (argc != 4) return 2;
     uint16_t port = (uint16_t)atoi(argv[1]);
-    NSData *fixture = [NSData dataWithContentsOfFile:[NSString stringWithUTF8String:argv[3]]];
+    NSData *fixture = [NSData dataWithContentsOfFile:[NSString stringWithUTF8String:argv[2]]];
     if (fixture.length < 5) return 3;
     const uint8_t *p = fixture.bytes;
     uint32_t size = be32(p); if (size > fixture.length - 4) return 4;
@@ -32,16 +33,17 @@ int main(int argc, char **argv) { @autoreleasepool {
         [frames addObject:[fixture subdataWithRange:NSMakeRange(at, length)]]; at += length;
     }
     if (!frames.count || at != fixture.length) return 6;
-    if (!showcase_browser_start(port, argv[2], touch, resync)) return 7;
+    if (!showcase_browser_start(port, touch, resync)) return 7;
     uint16_t width = 320, height = 180;
-    if (sscanf(argv[4], "%hux%hu", &width, &height) != 2) return 8;
+    if (sscanf(argv[3], "%hux%hu", &width, &height) != 2) return 8;
     showcase_browser_config(width, height, config.bytes, config.length);
     printf("READY\n"); fflush(stdout);
     fcntl(STDIN_FILENO, F_SETFL, O_NONBLOCK);
-    uint64_t sequence = 0; bool active = true, run = true, flowing = true;
+    uint64_t sequence = 0; bool active = true, run = true, flowing = true; char timing = 'n';
     while (run) { @autoreleasepool {
         char command[16]; ssize_t n = read(STDIN_FILENO, command, sizeof(command));
         for (ssize_t i = 0; i < n; i++) {
+            if (command[i] == 'd' || command[i] == 'z' || command[i] == 'n') timing = command[i];
             if (command[i] == 'q') run = false;
             if (command[i] == 's') flowing = false;
             if (command[i] == 'c') flowing = true;
@@ -63,7 +65,7 @@ int main(int argc, char **argv) { @autoreleasepool {
                 key |= (bytes[i] & 31) == 5; i += count;
             }
             uint64_t time = (5ULL << 32) + sequence * 4294967296ULL / 30;
-            showcase_browser_frame(time, key, frame.bytes, frame.length); sequence++;
+            showcase_browser_frame(timing == 'z' ? 0 : timing == 'd' ? (5ULL << 32) : time, key, frame.bytes, frame.length); sequence++;
         }
         usleep(33333);
     } }
