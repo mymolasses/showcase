@@ -4,6 +4,7 @@ set -e
 APP="/var/jb/Applications/Showcase.app"
 BT_HELPER="$APP/CarDisplaySim"
 SVC_HELPER="$APP/CarPlay Simulator"
+NET_HELPER="$APP/ShowcaseNet"
 BTDAEMON="/var/jb/usr/bin/BTdaemon"
 BTLIB="/var/jb/usr/lib/libBTstack.dylib"
 BTSTACK_PLIST="/var/jb/Library/LaunchDaemons/ch.ringwald.BTstack.plist"
@@ -71,6 +72,7 @@ if [ -d "$APP" ]; then
     chmod 4755 "$APP"/Showcase 2>/dev/null || true
     chmod 4755 "$BT_HELPER" 2>/dev/null || true
     chmod 4755 "$SVC_HELPER" 2>/dev/null || true
+    chmod 4755 "$NET_HELPER" 2>/dev/null || true
 fi
 
 if [ -f "$BTDAEMON" ]; then
@@ -87,9 +89,11 @@ if [ -d "$APP" ]; then
     sign_or_fail "$ENT_DIR/ent_app.xml" "$APP/Showcase"
     sign_or_fail "$ENT_DIR/ent_bt.xml" "$BT_HELPER"
     sign_or_fail "$ENT_DIR/ent_svc.xml" "$SVC_HELPER"
+    sign_or_fail "$ENT_DIR/ent_svc.xml" "$NET_HELPER"
     chmod 4755 "$APP"/Showcase 2>/dev/null || true
     chmod 4755 "$BT_HELPER" 2>/dev/null || true
     chmod 4755 "$SVC_HELPER" 2>/dev/null || true
+    chmod 4755 "$NET_HELPER" 2>/dev/null || true
 fi
 
 if [ -f "$BTDAEMON" ]; then

@@ -6004,6 +6004,9 @@ static uint32_t bridge100_ipv4_addr(void) {
             if (!ifa->ifa_name || !ifa->ifa_addr) continue;
             if (strcmp(ifa->ifa_name, "bridge100") != 0) continue;
             if (ifa->ifa_addr->sa_family != AF_INET) continue;
+            /* A browser-only /32 alias must not replace the hotspot's native
+             * address in CarPlay multicast announcements. */
+            if (ifa->ifa_netmask && ((struct sockaddr_in *)ifa->ifa_netmask)->sin_addr.s_addr == UINT32_MAX) continue;
             struct sockaddr_in *sin = (struct sockaddr_in *)ifa->ifa_addr;
             out = sin->sin_addr.s_addr;
             break;

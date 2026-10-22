@@ -3252,6 +3252,10 @@ typedef NS_ENUM(NSInteger, ConnectStep) {
 @property (nonatomic, assign) pid_t carplayBtPid;
 @property (nonatomic, assign) pid_t carplayServicesPid;
 @property (nonatomic, assign) pid_t baaBrokerPid;
+@property (nonatomic, assign) pid_t browserProbePid;
+@property (nonatomic, assign) BOOL browserProbeChanging;
+- (void)setBrowserProbeEnabled:(BOOL)enabled;
+- (NSString *)browserProbeDescription;
 
 /* bridge100 tcpdump capture */
 @property (nonatomic, assign) pid_t tcpdumpPid;
@@ -3387,6 +3391,10 @@ typedef NS_ENUM(NSInteger, ConnectStep) {
 
     self.window.rootViewController = self.vc;
     [self.window makeKeyAndVisible];
+
+#ifdef SHOWCASE_ROOTLESS
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:BROWSER_PROBE_KEY]) [self setBrowserProbeEnabled:YES];
+#endif
 
     [[NSNotificationCenter defaultCenter] addObserver:self
         selector:@selector(handleBackground)
@@ -3570,6 +3578,9 @@ static pid_t reusable_baa_broker(void) {
 - (void)handleForeground {
     [self endBackgroundTask];
     ip_log("foregrounded — continuing state=%ld", (long)self.state);
+#ifdef SHOWCASE_ROOTLESS
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:BROWSER_PROBE_KEY]) [self setBrowserProbeEnabled:YES];
+#endif
     if (self.state == StateActive || self.state == StateAwaitingPhone) {
         g_video_needs_resync = 1;
         g_video_suspended = 0;
@@ -3588,10 +3599,60 @@ static pid_t reusable_baa_broker(void) {
 
 - (void)applicationWillTerminate:(UIApplication *)application {
     (void)application;
+    if (self.browserProbePid > 0) kill(self.browserProbePid, SIGTERM);
     [self endAWDLSuppression];
     showcase_release_other_wifi("app terminating");
     [self stopNetworkDumpCaptureWithReason:@"app terminating"];
     /* The BAA broker stays up so the next launch can reuse its certificate. */
+}
+
+- (void)setBrowserProbeEnabled:(BOOL)enabled {
+    if (self.browserProbeChanging) return;
+    if (self.browserProbePid > 0 && !pid_alive(self.browserProbePid)) self.browserProbePid = 0;
+    NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
+    [d setBool:enabled forKey:BROWSER_PROBE_KEY]; [d synchronize];
+    if (enabled && pid_alive(self.browserProbePid)) return;
+    self.browserProbeChanging = YES;
+    pid_t previous = self.browserProbePid;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        pid_t child = 0;
+        if (!enabled) kill_pid(previous);
+        else {
+            NSString *path = [[[NSBundle mainBundle] bundlePath] stringByAppendingPathComponent:@"ShowcaseNet"];
+            char parent[24]; snprintf(parent, sizeof(parent), "%d", getpid());
+            char *args[] = {(char *)"ShowcaseNet", (char *)"--parent", parent, NULL};
+            child = spawn_daemon(path.fileSystemRepresentation, args, LOG_DIR "/network-probe.log");
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self.browserProbePid = child; self.browserProbeChanging = NO; [self renderState];
+        });
+    });
+}
+
+- (NSString *)browserProbeDescription {
+    if (self.browserProbeChanging) return @"正在启动或停止探测，请稍后刷新状态。";
+    NSData *bytes = [NSData dataWithContentsOfFile:BROWSER_PROBE_STATE];
+    NSDictionary *s = bytes ? [NSJSONSerialization JSONObjectWithData:bytes options:0 error:NULL] : nil;
+    if (![[NSUserDefaults standardUserDefaults] boolForKey:BROWSER_PROBE_KEY]) {
+        if ([s isKindOfClass:NSDictionary.class] && [s[@"phase"] isEqual:@"cleanup_failed"])
+            return @"探测已停止，但临时地址清理未确认。请查看 network-probe.log；必要时重启手机后重新越狱。";
+        return @"探测已关闭。开启个人热点后启用，不需要先连接发送 iPhone。";
+    }
+    if (!pid_alive(self.browserProbePid)) {
+        self.browserProbePid = 0;
+        return @"探测程序未运行。请关闭再开启，查看 network-probe.log。";
+    }
+    if (![s isKindOfClass:NSDictionary.class] || [s[@"pid"] intValue] != self.browserProbePid)
+        return @"探测正在准备，等待地址检查。请稍后刷新。";
+    NSMutableString *message = [NSMutableString stringWithFormat:@"状态：%@\n%@\n已收到 HTTP 探测请求：%@ 次\n",
+        s[@"phase"] ?: @"unknown", s[@"detail"] ?: @"", s[@"probeRequests"] ?: @0];
+    NSString *primary = s[@"hotspotAddress"];
+    if (primary.length) [message appendFormat:@"\n普通热点探测：http://%@:8081/\n", primary];
+    if ([s[@"localReady"] boolValue]) {
+        if ([s[@"port80"] boolValue]) [message appendString:@"\n车机探测：http://99.99.99.99/\n"];
+        [message appendString:@"备用探测：http://99.99.99.99:8081/\nCarPlay 页面：http://99.99.99.99:8080/\n\n本机地址已配置，仍需车机实际打开验证。"];
+    } else [message appendString:@"\n兼容入口尚未就绪。请确认个人热点已开，且至少一台设备已连接。"];
+    return message;
 }
 
 - (void)endBackgroundTask {
@@ -3876,8 +3937,9 @@ static pid_t reusable_baa_broker(void) {
 
 - (void)renderState {
     [UIApplication sharedApplication].idleTimerDisabled =
-        [[NSUserDefaults standardUserDefaults] boolForKey:BROWSER_OUTPUT_KEY] &&
-        self.state != StateIdle && self.state != StateStopping &&
+        (([[NSUserDefaults standardUserDefaults] boolForKey:BROWSER_OUTPUT_KEY] &&
+          self.state != StateIdle && self.state != StateStopping) ||
+         [[NSUserDefaults standardUserDefaults] boolForKey:BROWSER_PROBE_KEY]) &&
         [UIApplication sharedApplication].applicationState == UIApplicationStateActive;
     self.setupOverlay.hidden = NO;
     self.closeButton.hidden = YES;
@@ -7157,6 +7219,24 @@ static BOOL g_settings_hardware_loading = NO;
     CarPlayDisplayProfile profile = preferred_carplay_display_profile();
     BOOL custom = priority == CarPlayVideoCustom;
     CarPlayDisplayHardware hardware = carplay_display_hardware();
+
+#ifdef SHOWCASE_ROOTLESS
+    [b card:^(SettingsCard *card) {
+        UIView *probe = [self switchRow:@"Tesla Network Probe / 车机网络探测"
+            subtitle:@"Experimental local address. Personal Hotspot required; CarPlay optional."
+            on:[d boolForKey:BROWSER_PROBE_KEY] width:w changed:^(BOOL on) {
+                [weakSelf.appDelegate setBrowserProbeEnabled:on];
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), dispatch_get_main_queue(), ^{ [weakSelf render]; });
+            }];
+        [card addRow:probe height:probe.bounds.size.height];
+        [card addRow:[self actionRow:@"Refresh Network Status / 刷新探测状态"
+            color:nil width:w enabled:YES action:^{ [weakSelf render]; }] height:52];
+        [card addRow:[self actionRow:@"Copy Network Status / 复制探测状态"
+            color:nil width:w enabled:YES action:^{ [UIPasteboard generalPasteboard].string = [weakSelf.appDelegate browserProbeDescription]; }] height:52];
+    }];
+    [b labelText:[self.appDelegate browserProbeDescription] font:[UIFont monospacedDigitSystemFontOfSize:14 weight:UIFontWeightRegular]
+        alpha:0.85 inset:16 gapAfter:16 color:nil];
+#endif
 
     [b card:^(SettingsCard *card) {
         UIView *browser = [self switchRow:@"Browser Output / 浏览器输出（原型）"

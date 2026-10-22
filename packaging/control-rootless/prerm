@@ -16,6 +16,8 @@ launchctl_path() {
 
 case "$1" in
     remove|deconfigure|upgrade)
+        killall ShowcaseNet 2>/dev/null || true
+        sleep 1
         killall carplay_services 2>/dev/null || true
         killall carplay_bt 2>/dev/null || true
         killall CarDisplaySim 2>/dev/null || true

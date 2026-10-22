@@ -99,6 +99,9 @@ need_file "$REPO_ROOT/source/browser_bridge.m"
 need_file "$REPO_ROOT/source/browser_bridge.h"
 need_file "$REPO_ROOT/source/browser_settings.h"
 need_file "$REPO_ROOT/source/browser_assets.h"
+need_file "$REPO_ROOT/source/browser_network.c"
+need_file "$REPO_ROOT/source/browser_network.h"
+need_file "$REPO_ROOT/source/browser_probe.m"
 need_file "$REPO_ROOT/source/vendor/monocypher/monocypher.c"
 need_file "$REPO_ROOT/source/vendor/monocypher/monocypher-ed25519.c"
 need_file "$REPO_ROOT/source/vendor/libtommath/tommath.c"
@@ -151,6 +154,9 @@ cp "$REPO_ROOT/source/Showcase.m" \
    "$REPO_ROOT/source/browser_bridge.h" \
    "$REPO_ROOT/source/browser_settings.h" \
    "$REPO_ROOT/source/browser_assets.h" \
+   "$REPO_ROOT/source/browser_network.c" \
+   "$REPO_ROOT/source/browser_network.h" \
+   "$REPO_ROOT/source/browser_probe.m" \
    "$REPO_ROOT/source/Info.plist" \
    "$REPO_ROOT/source/ent_app.xml" \
    "$REPO_ROOT/source/ent_bt.xml" \
@@ -205,9 +211,12 @@ clang -fobjc-arc -DSHOWCASE_ROOTLESS=1 -miphoneos-version-min=12.0 -isysroot '$S
     vendor/libtommath/tommath.c \
     -framework Foundation -framework Security \
     -Wl,-undefined,dynamic_lookup
+
+clang -fobjc-arc -DSHOWCASE_ROOTLESS=1 -miphoneos-version-min=16.2 -isysroot '$SDK_REMOTE' \
+    -o ShowcaseNet browser_probe.m browser_network.c -framework Foundation
 "
 
-for bin in Showcase carplay_bt carplay_services; do
+for bin in Showcase carplay_bt carplay_services ShowcaseNet; do
   sshpass -p "$IPAD_PASS" scp "${SCP_OPTS[@]}" \
     "$IPAD_USER@$IPAD_HOST:$REMOTE_BASE/$bin" \
     "$WORK/rootfs/var/jb/Applications/Showcase.app/$bin"
@@ -285,6 +294,7 @@ as_root chmod 0755 var/jb/Applications/Showcase.app/*.lproj
 as_root chmod 0644 var/jb/Applications/Showcase.app/*.lproj/*
 as_root chmod 0644 var/jb/usr/share/showcase/ent_app.xml var/jb/usr/share/showcase/ent_bt.xml var/jb/usr/share/showcase/ent_svc.xml var/jb/usr/share/showcase/ent_btdaemon.xml
 as_root chmod 4755 var/jb/Applications/Showcase.app/Showcase var/jb/Applications/Showcase.app/CarDisplaySim 'var/jb/Applications/Showcase.app/CarPlay Simulator'
+as_root chmod 4755 var/jb/Applications/Showcase.app/ShowcaseNet
 as_root chmod 0755 var/jb/usr/bin/BTdaemon var/jb/usr/lib/libBTstack.dylib
 as_root chmod 0644 var/jb/Library/LaunchDaemons/ch.ringwald.BTstack.plist
 as_root chmod 0755 DEBIAN/postinst DEBIAN/prerm DEBIAN/postrm
@@ -293,6 +303,7 @@ as_root chmod 0644 DEBIAN/control
 as_root ldid -S'$REMOTE_BASE/ent_app.xml' var/jb/Applications/Showcase.app/Showcase
 as_root ldid -S'$REMOTE_BASE/ent_bt.xml'  var/jb/Applications/Showcase.app/CarDisplaySim
 as_root ldid -S'$REMOTE_BASE/ent_svc.xml' 'var/jb/Applications/Showcase.app/CarPlay Simulator'
+as_root ldid -S'$REMOTE_BASE/ent_svc.xml' var/jb/Applications/Showcase.app/ShowcaseNet
 as_root ldid -S'$REMOTE_BASE/ent_btdaemon.xml' var/jb/usr/bin/BTdaemon
 as_root ldid -S var/jb/usr/lib/libBTstack.dylib
 

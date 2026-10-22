@@ -192,7 +192,7 @@ static void handle_http(SCBrowserClient *c) {
         }
         NSDictionary *state = @{@"active": @(active), @"configured": @(configuration != nil),
             @"width": @(videoWidth), @"height": @(videoHeight), @"generation": @(generation),
-            @"version": @"Browser2", @"viewers": @(viewers), @"controllers": @(controllers),
+            @"version": @"Browser3", @"viewers": @(viewers), @"controllers": @(controllers),
             @"mediaQueueBytes": @(queued), @"congestionRecoveries": @(congestionRecoveries),
             @"frameAgeMs": @(lastFrameAt ? (browser_now() - lastFrameAt) * 1000 : -1)};
         http_reply(c, 200, @"application/json", [NSJSONSerialization dataWithJSONObject:state options:0 error:NULL]); return;

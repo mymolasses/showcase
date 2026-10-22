@@ -9,6 +9,9 @@
 #define BROWSER_QUALITY_KEY @"browserResolutionHeight"
 #define BROWSER_TOKEN_PATH @"/var/mobile/Library/Showcase/browser-token"
 #define BROWSER_PORT 8080
+#define BROWSER_PROBE_KEY @"browserNetworkProbeEnabled"
+#define BROWSER_PROBE_STATE @"/var/mobile/Library/Showcase/network-probe.json"
+#define BROWSER_PROBE_PORT 8081
 
 /* Shared by the UI and service; the token is never placed in argv or logs. */
 static NSString *showcase_browser_token(BOOL create) {

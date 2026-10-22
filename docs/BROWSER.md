@@ -13,7 +13,7 @@ The upstream CarPlay receiver, authentication and Bluetooth setup are retained.
 ```
 
 两部 iOS 设备仍然需要。接收机与发送机是不同的设备。用户计划用
-iPhone 14 Pro Max / iOS 16.2 做接收机；用户已反馈原生 CarPlay 接收正常；Browser2 的手机／车机稳定性仍待升级后验收。
+iPhone 14 Pro Max / iOS 16.2 做接收机；用户已反馈原生 CarPlay 接收正常；Browser3 的手机／车机稳定性仍待升级后验收。
 先确认原版 Showcase 的蓝牙接管和 CarPlay 接收已经工作。巨魔可安装应用，
 不代表已具备上游 deb、BTstack 和系统服务所要求的越狱运行环境。
 
@@ -24,7 +24,16 @@ iPhone 14 Pro Max / iOS 16.2 做接收机；用户已反馈原生 CarPlay 接收
 - 声音留在发送 iPhone；请在发送机选择车载蓝牙。音乐、导航语音、通话、Siri
   的实际路由需分别验证，不能由网页有画面推断全部可用。
 - 不支持锁屏／后台常驻；进入后台会停止网页视频并释放按压。
-- 不包含固定地址 VPN、HTTPS、WebCodecs、MJPEG 或车辆行驶限制的适配。
+- Browser3 增加实验性本地兼容地址／内核路由检查；不包含 VPN、HTTPS、WebCodecs、MJPEG 或车辆行驶限制的适配。
+
+## Browser3 车机网络探测
+
+rootless 包新增 Settings → Display → Tesla Network Probe / 车机网络探测，
+不依赖 CarPlay 会话，尝试在实际热点桥建立 `99.99.99.99/32` 与对应内核本地路由。
+配置成功后测试 `http://99.99.99.99/` 或 `http://99.99.99.99:8081/`，
+通过后才测试已有播放页 `http://99.99.99.99:8080/`。
+普通热点入口保留，不改 DHCP、默认路由或防火墙；地址和热点回程仍需 iOS／车机实测。
+详见 [Browser3 实车网络测试与回滚](TEST_TESLA_BROWSER3.md)。
 
 ## 使用
 
@@ -38,7 +47,7 @@ iPhone 14 Pro Max / iOS 16.2 做接收机；用户已反馈原生 CarPlay 接收
 
 监听地址为接收机的 IPv4 接口。页面只接受本机 IPv4 Host 和同源 WebSocket；
 当前不接受 `.local` 名称或 IPv6 URL。如果热点地址还未出现，先启动 CarPlay，
-然后重新打开设置页。不要照抄其他手机上的 IP 或把 `99.99.99.99` 当作已实现入口。
+然后重新打开设置页。普通入口不要照抄其他手机的 IP。兼容地址仅在车机网络探测实际显示 local_ready 时展示。
 
 浏览器模式在下次 CarPlay 连接时生效。关闭开关后同样重连，以恢复原版显示／音频配置。
 停止 CarPlay 后本地 HTTP 服务随网络 helper 退出。配对码存放在接收机私有文件
@@ -128,7 +137,7 @@ node tests/test_browser_e2e.cjs
 指定 Chrome 可执行路径，用标准 `NODE_PATH` 指定已有 Playwright 安装位置。
 测试不读取用户浏览器资料，不连接 iPhone，也不把视频上传到外部服务。
 
-2026-10-22 验证范围（Browser2 的新增回归见安装指南）：
+2026-10-22 验证范围（Browser3 新增网络回归见实车测试指南）：
 
 - 修改后的 UI、桥接与服务通过 iOS arm64 语法检查，并编译链接出未签名可执行文件。
 - 核心播放器、macOS 服务端集成、真实 Chrome MSE／触摸端到端测试通过。
@@ -138,8 +147,8 @@ node tests/test_browser_e2e.cjs
 ## 硬件验收与已知边界
 
 先确认目标车机可访问热点宿主地址、支持对应 AVC profile 的 MSE 和 WebSocket。
-网络连接成功不代表所有车辆状态下都可播放。无法访问私有 IP、需要固定地址或
-不支持 MSE 的车机不在本原型已经解决的范围内。
+网络连接成功不代表所有车辆状态下都可播放。Browser3 的兼容地址是实验入口，
+仍可能被目标固件的地址／HTTP 策略拒绝；HTTPS 和 MSE 不兼容问题尚未解决。
 
 现场顺序：网页连通 → 停车连续画面 → 单指和长按 → 刷新／重连 → 发送机蓝牙音频。
 记录车型、固件、CarPlay 发送机系统、接收机越狱方式与连接状态。

@@ -1,12 +1,18 @@
 # iPhone 14 Pro Max / iOS 16.2 / Dopamine rootless 安装测试
 
-本指南对应 `1.0~beta5-2+browser2` 浏览器原型，2026-10-22 构建。
+本指南对应 `1.0~beta5-2+browser3` 浏览器原型，2026-10-22 构建。
 安装包是 `iphoneos-arm64.deb`，使用 `/var/jb` 布局；它不是 IPA。
 这是针对该系统和越狱布局构建的测试包，尚未在真实 iPhone／特斯拉上验收。
 
-## Browser2 升级
+## Browser3 升级与实车网络探测
 
-1. 在 Showcase 三指轻点调出控制，点 × 停止 CarPlay，再安装 Browser2 deb 覆盖旧包。
+本版新增独立的车机网络探测与本地兼容地址。先按
+[Browser3 实车测试指南](TEST_TESLA_BROWSER3.md)测试 `http://99.99.99.99/` 和备用 8081，
+探测通过后再打开 CarPlay 播放页。该入口是实验 HTTP 适配，仍需真机验证。
+
+## 保留的 Browser2 视频优化
+
+1. 在 Showcase 三指轻点调出控制，点 × 停止 CarPlay，再安装 Browser3 deb 覆盖旧包。
 2. 打开 Settings → Display，确认 Browser Output 开启；网页默认 1080p，可选择 900p／720p。
 3. 记下新四位配对码；旧版长配对码失效，前导零需要保留。
 4. 返回首页，重新 Start CarPlay。关闭旧网页，再打开热点地址，输入四位码。
@@ -20,11 +26,11 @@ Browser2 修复重复 AVC 配置重建播放器、静态画面恢复被误判为
 ## 包内内容与验证范围
 
 - 从当前分支交叉编译修改后的 Showcase UI 和 CarPlay 网络服务。
-- 两个新程序均使用 `SHOWCASE_ROOTLESS=1`、arm64、iOS 16.2 deployment target。
-- 保留同版本官方 rootless 包的 CarDisplaySim、BTdaemon、libBTstack 和安装／卸载脚本。
+- 三个新程序（UI、CarPlay 服务、ShowcaseNet）均使用 `SHOWCASE_ROOTLESS=1`、arm64、iOS 16.2 deployment target。
+- 保留同版本官方 rootless 包的 CarDisplaySim、BTdaemon、libBTstack；安装脚本新增 ShowcaseNet 签名，卸载／升级时停止探测进程。
 - 下载的官方运行库包校验 SHA-256；构建记录列出三个未改运行库的摘要。
-- 新程序在 Mac 上带所需 entitlement 进行 ad-hoc 签名；安装时原版 postinst 使用手机的 ldid 重新签名。
-- 包内文件按 root:wheel 打包，UI 和两个 helper 为 4755，BTdaemon／dylib 为 0755。
+- 新程序在 Mac 上带所需 entitlement 进行 ad-hoc 签名；安装时 postinst 使用手机的 ldid 重新签名。
+- 包内文件按 root:wheel 打包，UI、两个原有 helper 和 ShowcaseNet 为 4755，BTdaemon／dylib 为 0755。
 - 独立版本号、`MinimumOSVersion=16.2`，并保留原包 ID `com.rostane.showcase`。
 
 保留原包 ID 是为了作为原版 Showcase 的升级安装，避免两个包争用蓝牙 daemon、文件和 socket。
@@ -35,7 +41,7 @@ Browser2 修复重复 AVC 配置重建播放器、静态画面恢复被误判为
 1. 确认手机已经进入 **Dopamine 已越狱** 状态；如果重启过，先在 Dopamine 中重新越狱。
 2. 退出／停止正在运行的 Showcase 会话。
 3. 在 Sileo 确认已安装 rootless 版本的 **ldid** 与 **UIKit Tools（uikittools）**。如果此前已安装官方 Showcase，通常已有这两个依赖。
-4. 把 `com.rostane.showcase_1.0~beta5-2+browser2_iphoneos-arm64.deb` 传到手机，例如通过 AirDrop 或 Filza 的文件传输功能。
+4. 把 `com.rostane.showcase_1.0~beta5-2+browser3_iphoneos-arm64.deb` 传到手机，例如通过 AirDrop 或 Filza 的文件传输功能。
 5. 用越狱环境里的 **Filza** 打开 `.deb`，选择安装，等待结束。不要把这个包交给巨魔当 IPA 安装。
 6. 若提示缺少依赖，先回到 Sileo 安装对应依赖，再重新安装本包，不要忽略错误。
 7. 回到桌面，打开 **Showcase Browser**。若安装成功但图标未出现，在终端执行 `sudo uicache -p /var/jb/Applications/Showcase.app`。
@@ -48,7 +54,7 @@ Filza 开发者说明：[DEB 安装与文件传输](https://www.tigisoftware.com
 
 ```sh
 cd /var/mobile/Downloads
-sudo dpkg -i './com.rostane.showcase_1.0~beta5-2+browser2_iphoneos-arm64.deb'
+sudo dpkg -i './com.rostane.showcase_1.0~beta5-2+browser3_iphoneos-arm64.deb'
 ```
 
 输入你在 Dopamine 设置的密码。如果报告缺少依赖，可在 Sileo 安装依赖，或在确认 apt 提示后用 `sudo apt-get -f install` 修复，再重新安装本包。
@@ -59,7 +65,7 @@ sudo dpkg -i './com.rostane.showcase_1.0~beta5-2+browser2_iphoneos-arm64.deb'
 dpkg-query -W -f='${Package} ${Version} ${Architecture}\n' com.rostane.showcase
 ```
 
-应包含 `1.0~beta5-2+browser2` 和 `iphoneos-arm64`。
+应包含 `1.0~beta5-2+browser3` 和 `iphoneos-arm64`。
 
 ## 测试顺序
 
@@ -73,7 +79,7 @@ dpkg-query -W -f='${Package} ${Version} ${Architecture}\n' com.rostane.showcase
 
 打开 Showcase 的 Settings → Display，启用 **Browser Output / 浏览器输出（原型）**。
 选择网页分辨率，默认 1920×1080 / 30 fps，热点较慢时可用 900p 或 720p。
-停止并重连 CarPlay，使 所选浏览器分辨率、30 fps 和发送机音频配置生效。
+点 × 完整停止会话后重新 Start CarPlay，使所选浏览器分辨率、30 fps 和发送机音频配置生效。
 重新打开 Display 设置查看当前热点 IPv4 地址和 4 位数字配对码。
 
 保持接收机 Showcase 前台运行。程序会禁用自动锁屏，但手动锁屏／切到其他 App 会暂停网页画面。
@@ -83,7 +89,7 @@ dpkg-query -W -f='${Package} ${Version} ${Architecture}\n' com.rostane.showcase
 把电脑连接到 14 Pro Max 的热点，浏览器打开设置中显示的 `http://实际热点IP:8080`，输入配对码。
 确认有连续画面，能点击 App、拖动地图、长按并松开。刷新和断开重连也应恢复。
 
-这一步可以先排除手机服务或输入通道问题。实际地址由手机显示，不是固定的 `99.99.99.99`。
+这一步可以先排除手机服务或输入通道问题。普通热点地址以手机显示为准；启用车机网络探测并显示 local_ready 后可测试兼容地址。
 
 ### 4. 再到特斯拉测试
 
@@ -98,7 +104,7 @@ dpkg-query -W -f='${Package} ${Version} ${Architecture}\n' com.rostane.showcase
 5. 在发送 iPhone 上选择特斯拉蓝牙音频，分别检查音乐和导航提示。
 
 通话和 Siri 麦克风路由需另测。测试时记录车型、车机固件、发送机 iOS 和 Dopamine 版本。
-本包没有实现固定 IP、MJPEG 回退或车辆状态限制的适配；Wi-Fi 连上不等于目标车机的 MSE 视频必然可用。
+本包增加实验性兼容地址；尚未实现 HTTPS、MJPEG 回退或车辆状态限制适配。Wi-Fi 连上不等于目标车机的 MSE 视频必然可用。
 
 ## 遇到问题
 
