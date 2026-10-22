@@ -95,7 +95,9 @@ cd packaging
 ```
 
 此脚本使用越狱设备及上游列出的本地依赖，不是纯 Xcode 一键安装脚本。
-本轮未生成可分发 deb；手机签名、安装和硬件验收仍待完成。
+另提供无需 SSH 手机的 Mac 交叉编译打包脚本 `tools/build_browser_rootless.py`。
+已为 iOS 16.2 / Dopamine rootless 构建测试 deb；安装步骤、包来源和重建方式见
+[iPhone 14 Pro Max 安装测试指南](INSTALL_DOPAMINE.md)。手机安装与硬件验收仍待完成。
 
 ## 验证
 
