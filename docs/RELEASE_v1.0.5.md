@@ -1,0 +1,14 @@
+Showcase Browser 5，适用于 iOS 16.2+ / Dopamine rootless，包版本与应用版本均为 **1.0.5**。
+
+- 修复异常／重复视频时间戳导致丢帧的问题；不要求时间戳的 CarPlay 会话使用到达时间。
+- 增加网页播放器直播缓冲停滞恢复，针对“只显示第一帧、重连更新一帧”的反馈。
+- 去掉网页配对码：访问入口即自动连接。
+- 默认画面填满网页，菜单改为浮层；可切换等比显示，触控坐标匹配两种模式。
+- 沿用 Browser4 的标准 HTTP 入口、网络探测和可配置 HTTPS/WSS。
+
+安装前：停止 CarPlay、关闭车机网络探测、退出 Showcase，再用 Filza 安装本 Release 的 `.deb` 覆盖旧版。保持 Dopamine 越狱激活。安装后重新开启网络探测、Browser Output 和 CarPlay，车机刷新原入口即可，不用密码。手机保持 Showcase 前台，关闭其他观看页。
+
+仅包含 **rootless / arm64 / iOS 16.2+** 测试包，不适用于 rootful 或 Taurine。
+音频仍由发送 iPhone 路由到车载蓝牙。填满模式可能拉伸比例，等比模式会按屏幕比例保留黑边。
+
+发布流程运行原生桥接、网络、HTTP/WS、HTTPS/WSS 与真实 Chrome MSE 回归测试，执行 iOS arm64 编译签名及 deb 内容校验，并提供 SHA256SUMS 和构建来源记录。手机及特斯拉实际兼容性仍需本次安装测试确认。

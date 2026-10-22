@@ -1,0 +1,87 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-15
+    timeout-minutes: 35
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CHROME: /Applications/Google Chrome.app/Contents/MacOS/Google Chrome
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify version tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_TYPE" = tag
+          test "$GITHUB_REF_NAME" = "v$(cat VERSION)"
+      - name: Prepare isolated browser tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --prefix "$RUNNER_TEMP/browser-tests" playwright@1.56.1
+          echo "NODE_PATH=$RUNNER_TEMP/browser-tests/node_modules" >> "$GITHUB_ENV"
+          if [ ! -x "$CHROME" ]; then
+            "$RUNNER_TEMP/browser-tests/node_modules/.bin/playwright" install chrome
+          fi
+      - name: Validate native services and browser playback
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/embed_browser.py
+          git diff --exit-code -- source/browser_assets.h
+          python3 tests/test_display_profile.py
+          python3 tests/test_control_connect.py
+          python3 tests/test_bluetooth_recovery.py
+          python3 tests/test_localization.py
+          python3 tests/test_browser_bridge.py
+          node tests/test_browser_player.cjs
+          node tests/test_browser_stall.cjs
+          node tests/test_browser_live.cjs
+          node tests/test_browser_probe.cjs
+          node tests/test_browser_e2e.cjs
+          SHOWCASE_TEST_TLS=1 node tests/test_browser_e2e.cjs
+          node tests/test_browser_web_tls.cjs
+      - name: Build and verify Dopamine rootless deb
+        shell: bash
+        run: |
+          set -euo pipefail
+          upstream_url=$(python3 -c 'import tools.build_browser_rootless as b; print(b.UPSTREAM_URL)')
+          curl --fail --location --retry 3 "$upstream_url" --output "$RUNNER_TEMP/upstream.deb"
+          python3 tools/build_browser_rootless.py --upstream-deb "$RUNNER_TEMP/upstream.deb"
+          cd build/browser-rootless
+          shasum -a 256 -c SHA256SUMS
+      - name: Publish verified release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" --verify-tag --draft \
+              --title "Showcase Browser 5 · $GITHUB_REF_NAME" \
+              --notes-file docs/RELEASE_v1.0.5.md
+          fi
+          gh release upload "$GITHUB_REF_NAME" \
+            build/browser-rootless/*.deb \
+            build/browser-rootless/SHA256SUMS \
+            build/browser-rootless/build-provenance.json \
+            docs/BROWSER5.md --clobber
+          gh release edit "$GITHUB_REF_NAME" --draft=false --prerelease \
+            --title "Showcase Browser 5 · $GITHUB_REF_NAME" \
+            --notes-file docs/RELEASE_v1.0.5.md
+          gh release view "$GITHUB_REF_NAME" --json url,assets

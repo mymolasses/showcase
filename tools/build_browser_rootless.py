@@ -25,7 +25,7 @@ UPSTREAM_SHA256 = 'f91ab0bf7ddf94d9eb1eacc56db37e8943ea8f1dce60c4976f793d679707a
 UPSTREAM_URL = ('https://github.com/amineross/showcase/releases/download/v1.0-beta5-2/'
                 'com.rostane.showcase_1.0.beta5-2_iphoneos-arm64.deb')
 APP = 'var/jb/Applications/Showcase.app/'
-VERSION = '1.0~beta5-2+browser4'
+VERSION = (ROOT / 'VERSION').read_text(encoding='utf-8').strip()
 NAME = 'com.rostane.showcase_' + VERSION + '_iphoneos-arm64.deb'
 
 
@@ -148,7 +148,7 @@ def main():
         ui = work / 'Showcase'
         service = work / 'CarPlay Simulator'
         probe = work / 'ShowcaseNet'
-        run(flags + ['-DAPP_VERSION="1.0 Beta 5-2 Browser 4"', '-DPACKAGE_VERSION="' + VERSION + '"',
+        run(flags + ['-DAPP_VERSION="' + VERSION + ' Browser 5"', '-DPACKAGE_VERSION="' + VERSION + '"',
                      'source/Showcase.m', '-framework', 'UIKit', '-framework', 'AVFoundation',
                      '-framework', 'AudioToolbox', '-framework', 'CoreMedia', '-framework', 'Foundation',
                      '-framework', 'Security', '-Wl,-undefined,dynamic_lookup', '-o', str(ui)])
@@ -174,8 +174,8 @@ def main():
         replace(payload, APP + 'CarPlay Simulator', service.read_bytes(), 0o4755)
         replace(payload, APP + 'ShowcaseNet', probe.read_bytes(), 0o4755)
     info = plistlib.loads(payload[APP + 'Info.plist'][1])
-    info.update(CFBundleDisplayName='Showcase Browser', CFBundleShortVersionString='1.0',
-                CFBundleVersion='1.0.504', MinimumOSVersion='16.2')
+    info.update(CFBundleDisplayName='Showcase Browser', CFBundleShortVersionString=VERSION,
+                CFBundleVersion='1.0.505', MinimumOSVersion='16.2')
     replace(payload, APP + 'Info.plist', plistlib.dumps(info), 0o644)
     # Retain upstream package ID and postinst signing for a normal upgrade over
     # Showcase; a second package would collide with its BTstack paths/socket.
@@ -183,7 +183,7 @@ def main():
     updates = {'Name': 'Showcase Browser Prototype (Rootless)', 'Version': VERSION,
                'Maintainer': 'mymolasses <mymolasses@users.noreply.github.com>',
                'Depends': 'firmware (>= 16.2), uikittools, ldid',
-               'Homepage': 'https://github.com/mymolasses/showcase/tree/codex/browser-prototype'}
+               'Homepage': 'https://github.com/mymolasses/showcase'}
     for line in old_control.splitlines():
         if line.startswith('Description:'):
             skipping_description = True
@@ -210,6 +210,7 @@ def main():
     replace(payload, 'var/jb/usr/share/showcase/browser-build.json', record, 0o644)
     replace(payload, 'var/jb/usr/share/showcase/BROWSER.md', (ROOT / 'docs/BROWSER.md').read_bytes(), 0o644)
     replace(payload, 'var/jb/usr/share/showcase/TEST_TESLA_BROWSER4.md', (ROOT / 'docs/TEST_TESLA_BROWSER4.md').read_bytes(), 0o644)
+    replace(payload, 'var/jb/usr/share/showcase/BROWSER5.md', (ROOT / 'docs/BROWSER5.md').read_bytes(), 0o644)
     md5 = ''.join(hashlib.md5(data).hexdigest() + '  ' + name + '\n'
                   for name, (member, data) in sorted(payload.items()) if member.isfile())
     replace(control, 'md5sums', md5.encode(), 0o644)
