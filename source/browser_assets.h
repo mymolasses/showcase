@@ -5,7 +5,7 @@ static const char browser_index_html[] =
 "<html lang=\"zh-CN\">\n"
 "<meta charset=\"utf-8\">\n"
 "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1,viewport-fit=cover\">\n"
-"<title>Dash</title>\n"
+"<title>Showcase+</title>\n"
 "<style>\n"
 "*{box-sizing:border-box}html,body{width:100%;height:100%;margin:0;overflow:hidden;background:#000;color:#edf2fa;font:16px system-ui,sans-serif}\n"
 "#surface{position:absolute;inset:0;touch-action:none;user-select:none;overflow:hidden;background:#000}\n"

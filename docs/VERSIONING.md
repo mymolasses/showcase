@@ -1,6 +1,6 @@
 # 名称与版本规则
 
-应用短名称为 **Dash**。桌面和系统名称以 `source/Info.plist` 的 CFBundleDisplayName / CFBundleName 为准，应用内名称也使用Dash。仓库和内部可执行文件继续沿用 Showcase，包标识 `com.rostane.showcase` 保持稳定，以便直接覆盖升级。
+应用短名称为 **Showcase+**，末尾的 `+` 表示此 fork 新增的浏览器和车机增强功能。桌面和系统名称以 `source/Info.plist` 的 CFBundleDisplayName / CFBundleName 为准，应用内名称也使用 Showcase+。仓库和内部可执行文件继续沿用 Showcase，包标识 `com.rostane.showcase` 保持稳定，以便直接覆盖升级。
 
 `VERSION` 只写三段数字，例如 `1.1.0`：
 
@@ -8,10 +8,10 @@
 - 功能版本：新增功能，如 `1.2.0`，修复版本归零。
 - 修复版本：修复、性能或布局优化，如 `1.1.1`。
 
-`BUILD_NUMBER` 是独立的正整数，当前从 `1001` 开始。每次需要分发新的安装包都递增一次，不重置；仅增加构建号不算新 Release。
+`BUILD_NUMBER` 是独立的正整数，当前为 `1002`。每次需要分发新的安装包都递增一次，不重置；仅增加构建号不算新 Release。
 
 每个新 Release 都必须修改 VERSION、递增 BUILD_NUMBER、更新 `docs/RELEASE_NOTES.md`，然后创建匹配标签 `v版本号`。例如应用 `1.1.1`、构建 `1002`、包版本 `1.1.1`、标签 `v1.1.1`。GitHub 上标记为预发布不改变应用名称，不把 Browser、Beta 或长描述塞进桌面名称。
 
 Release 工作流只在版本标签推送或手动选择标签时运行；main 和功能分支推送不自动构建。工作流检查标签与 VERSION 一致，验证、编译、签名和包校验全部成功后发布。
 
-`v1.0.5` 构建因命名规则调整已取消，未发布安装包；新命名规则首版为 `v1.1.0`。
+`v1.0.5` 和 `v1.1.0` 构建因命名调整已取消，未发布安装包；最终命名的首版为 `v1.1.1`。

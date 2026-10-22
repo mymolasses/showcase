@@ -7,9 +7,9 @@
     <key>CFBundleIdentifier</key>
     <string>com.rostane.showcase</string>
     <key>CFBundleName</key>
-    <string>Dash</string>
+    <string>Showcase+</string>
     <key>CFBundleDisplayName</key>
-    <string>Dash</string>
+    <string>Showcase+</string>
     <key>CFBundleVersion</key>
     <string>@BUNDLE_VERSION@</string>
     <key>CFBundleShortVersionString</key>

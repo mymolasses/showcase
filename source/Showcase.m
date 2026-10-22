@@ -194,7 +194,7 @@ static void ip_log_open(void) {
  * ═══════════════════════════════════════════════════════════════ */
 
 #ifndef APP_NAME
-#define APP_NAME          "Dash"
+#define APP_NAME          "Showcase+"
 #endif
 /* Release builds pass APP_VERSION from the VERSION file. */
 #ifndef APP_VERSION
