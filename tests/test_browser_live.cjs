@@ -91,6 +91,8 @@ const wire=(data,opcode=2)=>{
       await page.waitForTimeout(300);
       if(mode!=='mjpeg')assert((await page.evaluate(()=>showcaseDiagnostics().drawnFrames))>before,'actual output must continue in '+mode);
       else assert.equal(await page.locator('#display img').evaluate(img=>img.naturalWidth),640);
+      const color=await page.evaluate(()=>{const source=document.querySelector('#display canvas,#display img');const c=document.createElement('canvas');c.width=c.height=1;const ctx=c.getContext('2d');ctx.drawImage(source,10,300,1,1,0,0,1,1);return [...ctx.getImageData(0,0,1,1).data];});
+      assert(color[2]>color[0] && color[2]>70 && color[3]===255,'decoded pixels must match the blue fixture in '+mode+': '+color);
       assert.equal(await page.locator('#poster').isVisible(),false);
     }
     const rect=await page.locator('#surface').boundingBox();
