@@ -8,8 +8,10 @@ import shutil
 
 ROOT = Path(__file__).resolve().parents[1]
 PINS = {
-    'libdatachannel': ('https://github.com/paullouisageneau/libdatachannel.git', 'v0.24.1', 'a02b751917ac8afc8c58dc6f4461d25ff9465d48'),
-    'mbedtls': ('https://github.com/Mbed-TLS/mbedtls.git', 'mbedtls-3.6.5', 'e185d7fd85499c8ce5ca2a54f5cf8fe7dbe3f8df'),
+    # Both sides of the DTLS fix are required: ClientHello reassembly in
+    # Mbed TLS and the corrected datagram read length in libdatachannel.
+    'libdatachannel': ('https://github.com/paullouisageneau/libdatachannel.git', 'v0.24.6', '6b1e2e620f1e37f0eafeee702eaea0043cb305fd'),
+    'mbedtls': ('https://github.com/Mbed-TLS/mbedtls.git', 'mbedtls-3.6.6', '0bebf8b8c7f07abe3571ded48a11aa907a1ffb20'),
 }
 
 def run(args):
