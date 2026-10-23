@@ -15,7 +15,7 @@
     let closed = false, element, pending = null, animation = null, processing = false, waitingKey = true;
     let worker, decoder, pc, video, timer, inputCount = 0, outputCount = 0, dropped = 0, inFlight = 0;
     let lastTimestamp = -1, lastSequence = -1, lastOutputAt = null, lastInputAt = 0, callbackCount = 0, lastCallbackTime = null;
-    let latestQuality = 0, offered = false, remoteCandidates = [];
+    let latestQuality = 0, offered = false, remoteCandidates = [], localCandidates = [], answerSent = false;
     const output = (source, width, height, stamp) => {
       if (closed) return;
       if (Number.isFinite(stamp) && stamp <= lastTimestamp) { dropped++; return; }
@@ -67,8 +67,9 @@
       canvas();
       if (mode === 'webcodecs') {
         decoder = new VideoDecoder({output:queuePicture,error:error => { if (!closed) onError('WebCodecs: '+error.message); }});
-        decoder.configure({codec:'avc1.'+[...config.avcc.slice(1,4)].map(n=>n.toString(16).padStart(2,'0')).join(''),
-          codedWidth:config.width,codedHeight:config.height,description:config.avcc,optimizeForLatency:true});
+        try { decoder.configure({codec:'avc1.'+[...config.avcc.slice(1,4)].map(n=>n.toString(16).padStart(2,'0')).join(''),
+          codedWidth:config.width,codedHeight:config.height,description:config.avcc,optimizeForLatency:true}); }
+        catch(error) { decoder.close(); throw error; }
       } else if (mode === 'software') {
         if (config.avcc[1] !== 66) throw Error('Broadway 软件解码仅支持 Baseline 视频；当前源不兼容，请选择 JPEG');
         worker = new Worker('/vendor/broadway/worker.js');
@@ -89,7 +90,11 @@
         pc = new RTCPeerConnection({iceServers:[]});
         video = document.createElement('video'); video.muted = true; video.autoplay = true; video.playsInline = true;
         video.style.cssText = 'position:fixed;left:-10000px;width:1px;height:1px'; container.append(video);
-        pc.onicecandidate = event => { if (event.candidate) sendSignal({type:'rtc-candidate',candidate:event.candidate.candidate,mid:event.candidate.sdpMid || 'video',generation:config.generation}); };
+        pc.onicecandidate = event => {
+          if (!event.candidate || closed) return;
+          const message={type:'rtc-candidate',candidate:event.candidate.candidate,mid:event.candidate.sdpMid || 'video',generation:config.generation};
+          if(answerSent)sendSignal(message);else if(localCandidates.length<16)localCandidates.push(message);
+        };
         pc.onconnectionstatechange = () => { if (pc.connectionState === 'failed') onError('WebRTC UDP / DTLS 连接失败'); };
         pc.ontrack = event => { video.srcObject = new MediaStream([event.track]); video.play().catch(error=>onError('WebRTC 播放被拒绝：'+error.message)); };
         const paintVideo = (_,metadata) => {
@@ -103,7 +108,8 @@
           if (advanced && video.readyState >= 2) {
             // A repeated callback is not evidence of a new picture. Never use
             // video.currentTime, which may advance while output is suppressed.
-            output(video,video.videoWidth,video.videoHeight,undefined);
+            try { output(video,video.videoWidth,video.videoHeight,undefined); }
+            catch(error) { onError('WebRTC 绘制失败：'+error.message); }
           }
           if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(paintVideo);
         };
@@ -140,6 +146,7 @@
             offered=true; for (const candidate of remoteCandidates) await pc.addIceCandidate(candidate); remoteCandidates=[];
             const answer=await pc.createAnswer(); if(closed)return; await pc.setLocalDescription(answer);
             sendSignal({type:'rtc-answer',sdp:pc.localDescription.sdp,generation:config.generation});
+            answerSent=true;for(const candidate of localCandidates)sendSignal(candidate);localCandidates=[];
           } else if (message.type === 'rtc-candidate') {
             const candidate={candidate:message.candidate,sdpMid:message.mid};
             if (offered) await pc.addIceCandidate(candidate); else remoteCandidates.push(candidate);
