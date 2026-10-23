@@ -5,6 +5,7 @@
 #import "browser_rtc.h"
 #include <rtc/rtc.h>
 #include <pthread.h>
+#include <stdlib.h>
 
 static dispatch_queue_t rtcQueue;
 static pthread_mutex_t rtcLock = PTHREAD_MUTEX_INITIALIZER;
@@ -16,6 +17,13 @@ static int peer = -1, track = -1;
 static bool needKey = true, connected;
 static NSData *parameterSets;
 static NSString *lastError;
+static int iceStatus;
+static void rtc_log(rtcLogLevel level, const char *message) {
+    (void)level; fprintf(stderr,"[WEBRTC] %s\n",message);
+}
+static void ice_changed(int id, rtcIceState state, void *ptr) {
+    (void)ptr; pthread_mutex_lock(&rtcLock); if(id==peer)iceStatus=state; pthread_mutex_unlock(&rtcLock);
+}
 
 static void event_locked(NSDictionary *message) {
     if (!events) events = [NSMutableArray array];
@@ -63,7 +71,7 @@ static void dispose_peer(void) {
 static dispatch_queue_t work_queue(void) {
     static dispatch_once_t once;
     dispatch_once(&once, ^{ rtcQueue = dispatch_queue_create("showcase.rtc", DISPATCH_QUEUE_SERIAL);
-        rtcSetThreadPoolSize(2); rtcInitLogger(RTC_LOG_WARNING, NULL); });
+        rtcSetThreadPoolSize(2); rtcInitLogger(getenv("SHOWCASE_RTC_DEBUG")?RTC_LOG_DEBUG:RTC_LOG_WARNING,rtc_log); });
     return rtcQueue;
 }
 static void error_event(NSString *message) {
@@ -98,6 +106,7 @@ void showcase_rtc_start(uint32_t generation, NSData *avcc) {
         pthread_mutex_lock(&rtcLock); peer = created; sessionGeneration = generation; pthread_mutex_unlock(&rtcLock);
         rtcSetLocalDescriptionCallback(created, local_description); rtcSetLocalCandidateCallback(created, local_candidate);
         rtcSetStateChangeCallback(created, state_changed);
+        rtcSetIceStateChangeCallback(created,ice_changed);
         NSString *profile = [NSString stringWithFormat:@"packetization-mode=1;level-asymmetry-allowed=1;profile-level-id=%02x%02x%02x",p[1],p[2],p[3]];
         rtcTrackInit init = {0}; init.direction = RTC_DIRECTION_SENDONLY; init.codec = RTC_CODEC_H264;
         init.payloadType = 96; init.ssrc = 0x53484350; init.mid = "video"; init.name = "Showcase";
@@ -154,6 +163,6 @@ NSArray<NSDictionary *> *showcase_rtc_events(void) {
 NSDictionary *showcase_rtc_stats(void) {
     pthread_mutex_lock(&rtcLock);
     NSDictionary *state = @{@"rtcConnected":@(connected), @"rtcSentFrames":@(sent), @"rtcDroppedInputs":@(dropped),
-        @"rtcQueueBytes":@(queuedBytes), @"rtcLastError":lastError ?: @""};
+        @"rtcQueueBytes":@(queuedBytes), @"rtcIceState":@(iceStatus), @"rtcLastError":lastError ?: @""};
     pthread_mutex_unlock(&rtcLock); return state;
 }

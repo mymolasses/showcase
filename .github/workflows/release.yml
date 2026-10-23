@@ -49,6 +49,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Identify native toolchain
+        id: toolchain
+        run: echo "sdk=$(xcrun --sdk iphoneos --show-sdk-version)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v4
+        id: native-cache
+        with:
+          path: build/browser-native
+          key: browser-native-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.sdk }}-${{ hashFiles('tools/browser_native.py') }}
       - name: Verify version tag
         shell: bash
         run: |
@@ -120,3 +128,8 @@ jobs:
             --title "$app_name $RELEASE_TAG" \
             --notes-file docs/RELEASE_NOTES.md
           gh release view "$RELEASE_TAG" --json url,assets
+      - uses: actions/cache/save@v4
+        if: ${{ always() && steps.native-cache.outputs.cache-hit != 'true' }}
+        with:
+          path: build/browser-native
+          key: ${{ steps.native-cache.outputs.cache-primary-key }}

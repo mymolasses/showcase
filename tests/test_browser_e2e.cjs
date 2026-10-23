@@ -16,6 +16,7 @@ const root = path.resolve(__dirname, '..');
 const fixtureTLS = require('./browser_web_fixture.cjs');
 const useTLS = process.env.SHOWCASE_TEST_TLS === '1';
 const domain = 'carplay.showcase.test';
+process.env.SHOWCASE_RTC_DEBUG='1'; // Synthetic local peers only; no phone data.
 
 (async () => {
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'showcase-browser-e2e-'));
@@ -147,7 +148,7 @@ const domain = 'carplay.showcase.test';
         await page.waitForFunction(mode=>{const d=showcaseDiagnostics();return d.renderer===mode && d.displayed && (mode==='mjpeg'||d.drawnFrames>2);},mode,{timeout:25000});
         const drawn=await page.evaluate(()=>showcaseDiagnostics().drawnFrames);
         if(mode!=='mjpeg') await page.waitForFunction(count=>showcaseDiagnostics().drawnFrames>count+2,drawn,{timeout:15000});
-      } catch(error) { throw Error(mode+' failed: '+await page.evaluate(()=>JSON.stringify(showcaseDiagnostics()))+'\n'+stderr+'\n'+error); }
+      } catch(error) { throw Error(mode+' failed: '+await page.evaluate(()=>JSON.stringify(showcaseDiagnostics()))+'\n'+stderr+'\n'+output.slice(-8000)+'\n'+error); }
       assert.equal(await page.locator('#poster').isVisible(),false);
       const color=await page.evaluate(()=>{const source=document.querySelector('#display canvas,#display img');const c=document.createElement('canvas');c.width=c.height=1;const ctx=c.getContext('2d');const height=source.naturalHeight||source.height;ctx.drawImage(source,10,height-10,1,1,0,0,1,1);return [...ctx.getImageData(0,0,1,1).data];});
       assert(color[2]>color[0] && color[2]>40 && color[3]===255,'native decoded pixels must match the fixture in '+mode+': '+color);
