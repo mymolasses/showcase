@@ -154,6 +154,7 @@ def main():
                   'compiled_source_sha256': {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in source_paths}}
     native = prepare_native('ios')
     provenance['native_dependency_pins'] = native['pins']
+    provenance['mbedtls_configuration_defines'] = native['mbedtls_defines']
     provenance['browser_vendor_files'] = json.loads((ROOT/'web/vendor/broadway/provenance.json').read_text())
     unchanged = [APP + 'CarDisplaySim', 'var/jb/usr/bin/BTdaemon', 'var/jb/usr/lib/libBTstack.dylib']
     provenance['unchanged_runtime_sha256'] = {name: hashlib.sha256(payload[name][1]).hexdigest() for name in unchanged}
@@ -231,6 +232,12 @@ def main():
     replace(payload, 'var/jb/usr/share/showcase/PLAYBACK_DIAGNOSTICS.md', (ROOT / 'docs/PLAYBACK_DIAGNOSTICS.md').read_bytes(), 0o644)
     replace(payload, 'var/jb/usr/share/showcase/PLAYBACK_REVIEW.md', (ROOT / 'docs/PLAYBACK_REVIEW.md').read_bytes(), 0o644)
     replace(payload, 'var/jb/usr/share/showcase/WIFI_HANDOFF.md', (ROOT / 'docs/WIFI_HANDOFF.md').read_bytes(), 0o644)
+    replace(payload, 'var/jb/usr/share/showcase/BROWSER_MODES.md', (ROOT / 'docs/BROWSER_MODES.md').read_bytes(), 0o644)
+    replace(payload, 'var/jb/usr/share/showcase/THIRD_PARTY_BROWSER.md', (ROOT / 'docs/THIRD_PARTY_BROWSER.md').read_bytes(), 0o644)
+    for name, path in native.get('licenses',{}).items():
+        replace(payload,'var/jb/usr/share/showcase/licenses/'+name,Path(path).read_bytes(),0o644)
+    for path in (ROOT/'web/vendor/broadway').glob('LICENSE*'):
+        replace(payload,'var/jb/usr/share/showcase/licenses/broadway/'+path.name,path.read_bytes(),0o644)
     md5 = ''.join(hashlib.md5(data).hexdigest() + '  ' + name + '\n'
                   for name, (member, data) in sorted(payload.items()) if member.isfile())
     replace(control, 'md5sums', md5.encode(), 0o644)

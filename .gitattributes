@@ -1,0 +1,2 @@
+web/vendor/broadway/* -text
+*.wasm binary

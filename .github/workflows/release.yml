@@ -72,6 +72,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          python3 tools/verify_browser_vendor.py
           python3 tools/embed_browser.py
           git diff --exit-code -- source/browser_assets.h
           python3 tests/test_display_profile.py
@@ -114,7 +115,7 @@ jobs:
             build/browser-rootless/*.deb \
             build/browser-rootless/SHA256SUMS \
             build/browser-rootless/build-provenance.json \
-            docs/BROWSER5.md docs/PLAYBACK_DIAGNOSTICS.md docs/PLAYBACK_REVIEW.md docs/WIFI_HANDOFF.md --clobber
+            docs/BROWSER5.md docs/BROWSER_MODES.md docs/THIRD_PARTY_BROWSER.md docs/PLAYBACK_DIAGNOSTICS.md docs/PLAYBACK_REVIEW.md docs/WIFI_HANDOFF.md --clobber
           gh release edit "$RELEASE_TAG" --draft=false --prerelease \
             --title "$app_name $RELEASE_TAG" \
             --notes-file docs/RELEASE_NOTES.md

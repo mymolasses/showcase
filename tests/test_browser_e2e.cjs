@@ -37,7 +37,7 @@ const domain = 'carplay.showcase.test';
         const bytes = new Uint8Array(chunk.byteLength); chunk.copyTo(bytes); frames.push([...bytes]);
         if (meta.decoderConfig?.description) description = [...new Uint8Array(meta.decoderConfig.description)];
       }, error(error) { failure = error.message; }});
-      encoder.configure({codec: 'avc1.4D4028', width: 1920, height: 1080, framerate: 30,
+      encoder.configure({codec: 'avc1.42002a', width: 1920, height: 1080, framerate: 30,
         bitrate: 6000000, latencyMode: 'realtime', avc: {format: 'avc'}});
       const canvas = document.createElement('canvas'); canvas.width = 1920; canvas.height = 1080;
       const context = canvas.getContext('2d');
@@ -78,12 +78,12 @@ const domain = 'carplay.showcase.test';
     let mediaConnections = 0, controls = 0;
     page.on('pageerror', error => pageErrors.push(error.message));
     page.on('websocket', socket => {
-      if (socket.url().endsWith('/media')) mediaConnections++;
+      if (['/media','/jpeg','/rtc'].some(route=>socket.url().endsWith(route))) mediaConnections++;
       if (socket.url().endsWith('/control')) controls++;
     });
     await page.goto(useTLS ? `https://${domain}:${tlsPort}/` : `http://127.0.0.1:${frontPort}/`);
     assert.equal(await page.locator('input').count(), 0);
-    await page.waitForFunction(() => { const v = document.querySelector('video'); return v.videoWidth === 1920 && v.currentTime > 0.1 && v.readyState >= 2; }, null, {timeout: 15000});
+    await page.waitForFunction(()=>window.showcaseDiagnostics?.().displayed && showcaseDiagnostics().drawnFrames>2,null,{timeout:20000});
     await until(() => stderr.includes('[BROWSER] control connected'), 'browser control channel');
     // Status polling must enable input after actual frames arrive.
     await page.waitForTimeout(1200);
@@ -119,14 +119,14 @@ const domain = 'carplay.showcase.test';
       await page.waitForTimeout(250);
     }
     // Exercise the actual static-screen/gap and repeated-config failure paths.
-    const initialTime = await page.locator('video').evaluate(v => v.currentTime);
+    const initialTime = await page.evaluate(()=>showcaseDiagnostics().drawnFrames);
     helper.stdin.write('s');
     await page.waitForTimeout(2300);
     helper.stdin.write('r');
     await page.waitForTimeout(100);
     assert.equal(mediaConnections, 1);
     helper.stdin.write('tc');
-    await page.waitForFunction(time => document.querySelector('video').currentTime > time + 0.1, initialTime, {timeout: 10000});
+    await page.waitForFunction(time=>showcaseDiagnostics().drawnFrames>time,initialTime,{timeout:15000});
     for (let i = 0; i < 8; i++) {
       helper.stdin.write('r'); await page.waitForTimeout(1500);
     }
@@ -136,7 +136,19 @@ const domain = 'carplay.showcase.test';
     assert.equal(await page.locator('#notice').isVisible(), false);
     await page.screenshot({path: path.join(work, 'browser.png')});
     await page.click('#reconnect');
-    await page.waitForFunction(() => document.querySelector('video').currentTime > 0.1 && document.querySelector('video').readyState >= 2, null, {timeout: 15000});
+    await page.waitForFunction(()=>showcaseDiagnostics().displayed && showcaseDiagnostics().drawnFrames>2,null,{timeout:20000});
+    // Every offered backend must actually decode/render through production
+    // native services; no synthetic server or permissive asset interception.
+    for(const mode of ['webcodecs','software','mjpeg','webrtc','jpeg']) {
+      await page.selectOption('#renderer',mode);
+      try {
+        await page.waitForFunction(mode=>{const d=showcaseDiagnostics();return d.renderer===mode && d.displayed && (mode==='mjpeg'||d.drawnFrames>2);},mode,{timeout:25000});
+        const drawn=await page.evaluate(()=>showcaseDiagnostics().drawnFrames);
+        if(mode!=='mjpeg') await page.waitForFunction(count=>showcaseDiagnostics().drawnFrames>count+2,drawn,{timeout:15000});
+      } catch(error) { throw Error(mode+' failed: '+await page.evaluate(()=>JSON.stringify(showcaseDiagnostics()))+'\n'+stderr+'\n'+error); }
+      assert.equal(await page.locator('#poster').isVisible(),false);
+      if(mode==='jpeg') assert.equal(await page.locator('#display canvas').evaluate(c=>c.width),1280,'native JPEG caps width');
+    }
     // Actual service loss: retain the last image, back off, recover new sockets.
     helper.stdin.write('q'); await once(helper, 'exit');
     await page.waitForFunction(() => document.querySelector('#state').textContent.includes('重试'));
@@ -144,13 +156,13 @@ const domain = 'carplay.showcase.test';
     helper = spawn(path.join(work, 'bridge'), [String(port), fixture, '1920x1080'], {stdio: ['pipe', 'pipe', 'pipe']});
     helper.stdout.on('data', bytes => { output += bytes.toString(); });
     helper.stderr.on('data', bytes => { stderr += bytes.toString(); });
-    await page.waitForFunction(() => document.querySelector('video').currentTime > 0.1 && document.querySelector('video').readyState >= 2, null, {timeout: 15000});
+    await page.waitForFunction(()=>showcaseDiagnostics().displayed && showcaseDiagnostics().drawnFrames>2,null,{timeout:20000});
     helper.stdin.write('b');
     await page.waitForFunction(() => document.querySelector('#notice').textContent.includes('前台'));
     helper.stdin.write('f');
-    await page.waitForFunction(() => document.querySelector('video').currentTime > 0.1 && document.querySelector('video').readyState >= 2, null, {timeout: 15000});
+    await page.waitForFunction(()=>showcaseDiagnostics().displayed && showcaseDiagnostics().drawnFrames>2,null,{timeout:20000});
     assert.deepEqual(pageErrors, []);
-    console.log('PASS ('+(useTLS ? 'HTTPS/WSS' : 'HTTP/WS')+'): front door -> production WS -> Chrome 1080p MSE, passwordless entry, repeated config stability, idle resume, input, retry + retained frame, foreground reset');
+    console.log('PASS ('+(useTLS ? 'HTTPS/WSS' : 'HTTP/WS')+'): native 1080p JPEG/MJPEG/WebCodecs/Broadway/WebRTC, HTTP/TLS gateway, touch/hold, idle resume, repeated config, retry + retained frame, foreground reset');
     console.log('Synthetic screenshot:', path.join(work, 'browser.png'));
   } finally {
     if (helper && helper.exitCode === null) { helper.stdin.write('q'); await once(helper, 'exit'); }

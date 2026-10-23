@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+import shutil
 
 ROOT = Path(__file__).resolve().parents[1]
 PINS = {
@@ -21,7 +22,7 @@ def prepare(platform='macos'):
     manifest = target / 'flags.json'
     if manifest.exists():
         data = json.loads(manifest.read_text())
-        if data.get('pins') == PINS_JSON and all(Path(p).exists() for p in data['libraries']):
+        if data.get('pins') == PINS_JSON and data.get('mbedtls_defines')==['MBEDTLS_SSL_DTLS_SRTP'] and 'licenses' in data and all(Path(p).exists() for p in data['libraries']):
             return data
     sources = ROOT / 'build/browser-native/sources'
     sources.mkdir(parents=True, exist_ok=True)
@@ -33,6 +34,14 @@ def prepare(platform='macos'):
         if actual != revision:
             raise RuntimeError('Dependency revision mismatch: ' + name)
     prefix = target / 'installed'
+    # Mbed TLS ships DTLS-SRTP disabled. Its library and installed public
+    # headers must use the same explicit configuration for WebRTC media.
+    config=sources/'mbedtls/include/mbedtls/mbedtls_config.h'
+    content=config.read_text()
+    if '\n#define MBEDTLS_SSL_DTLS_SRTP\n' not in content:
+        old='//#define MBEDTLS_SSL_DTLS_SRTP'
+        if old not in content: raise RuntimeError('Mbed TLS SRTP configuration changed')
+        config.write_text(content.replace(old,'#define MBEDTLS_SSL_DTLS_SRTP'))
     common = ['-DCMAKE_BUILD_TYPE=Release', '-DBUILD_SHARED_LIBS=OFF', '-DCMAKE_POSITION_INDEPENDENT_CODE=ON']
     if platform == 'ios':
         common += ['-DCMAKE_SYSTEM_NAME=iOS', '-DCMAKE_OSX_SYSROOT=iphoneos', '-DCMAKE_OSX_ARCHITECTURES=arm64',
@@ -59,7 +68,17 @@ def prepare(platform='macos'):
     main = next(p for p in libraries if Path(p).name == 'libdatachannel.a')
     libraries = [main] + sorted(set(libraries) - {main})
     includes = [str(sources/'libdatachannel/include'), str(prefix/'include')]
-    data = dict(pins=PINS_JSON, includes=includes, libraries=libraries)
+    data = dict(pins=PINS_JSON, includes=includes, libraries=libraries,mbedtls_defines=['MBEDTLS_SSL_DTLS_SRTP'])
+    notices = {}
+    for name in PINS:
+        checkout=sources/name
+        for source in checkout.rglob('*'):
+            if source.is_file() and '.git' not in source.parts and source.name.upper().split('.')[0] in ('LICENSE','COPYING','COPYRIGHT','NOTICE'):
+                relative=Path(name)/source.relative_to(checkout)
+                destination=target/'licenses'/relative
+                destination.parent.mkdir(parents=True,exist_ok=True)
+                shutil.copyfile(source,destination);notices[str(relative)]=str(destination)
+    data['licenses']=notices
     manifest.write_text(json.dumps(data, indent=2)+'\n')
     return data
 

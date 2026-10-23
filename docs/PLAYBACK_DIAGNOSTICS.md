@@ -1,3 +1,17 @@
+# Showcase+ 1.3.0：当前诊断
+
+当前显示方式见 [BROWSER_MODES.md](BROWSER_MODES.md)。`renderer` 是实际后端，`fallbackReason` 说明回退原因；`capabilities` 记录浏览器安全上下文和解码 API，`receiver` 是独立的手机端统计。
+
+`presentedFps` 只统计有效解码后绘制到 Canvas 的输出，不能证明屏幕图像内容变化。MJPEG 无可靠观测时显示 null。`drawnFrames`、`lastDrawAgeMs`、`decodeQueue`、`waitingKey` 用于检查网页输出。WebRTC 的回调次数、原始帧时间与质量计数分别保留，不再把重复回调或播放时钟推进当作新画面。
+
+`receivedFps` 和 `bitrateMbps` 是网页 WS 视频消息的接收量；MJPEG / WebRTC 非 WS 视频路径没有准确值时为 null。手机来流、JPEG 编码／丢弃／错误／队列，以及 WebRTC 连接／发送等数据在 `receiver` 内，与网页输出分开。
+
+默认 JPEG 下若 `receiver.jpegEncodedFrames` 持续增加而网页 `drawnFrames` 不增加，检查图片通道和浏览器解码；若 `jpegErrors` 增加，结合 `jpegLastError` 和源视频日志判断。触摸归属与控制积压仍由 `inputOwner`、`controlBufferedBytes` 和服务端状态说明。复制功能仅在本地生成文字，不上传。
+
+## v1.2.x 历史诊断与故障证据
+
+以下保留原 MSE 版本的复查记录，字段和恢复策略不能直接当作 v1.3.0 的现行实现。
+
 # Showcase+：播放恢复和诊断
 
 v1.2.1 的复查与新增触摸／诊断改动见 [播放与触摸复查](PLAYBACK_REVIEW.md)。
