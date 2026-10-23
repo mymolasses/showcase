@@ -97,14 +97,14 @@
           const message={type:'rtc-candidate',candidate:event.candidate.candidate,mid:event.candidate.sdpMid || 'video',generation:config.generation};
           if(answerSent)sendSignal(message);else if(localCandidates.length<16)localCandidates.push(message);
         };
-        pc.onconnectionstatechange = () => { if (pc.connectionState === 'failed') onError('WebRTC UDP / DTLS 连接失败'); };
-        pc.ontrack = event => { video.srcObject = new MediaStream([event.track]); video.play().catch(error=>onError('WebRTC 播放被拒绝：'+error.message)); };
+        pc.onconnectionstatechange = () => { if (!closed && pc.connectionState === 'failed') onError('WebRTC UDP / DTLS 连接失败'); };
+        pc.ontrack = event => { if(closed)return;video.srcObject = new MediaStream([event.track]);video.play().catch(error=>{if(!closed)onError('WebRTC 播放被拒绝：'+error.message);}); };
         const paintVideo = (_,metadata) => {
-          if (closed) return; callbackCount++;
+          if (closed) return; if(metadata)callbackCount++;
           const quality = video.getVideoPlaybackQuality?.();
           const count = quality ? quality.totalVideoFrames-quality.droppedVideoFrames : null;
           const time = metadata?.mediaTime;
-          const advanced = count !== null ? count > latestQuality : Number.isFinite(time) && (lastCallbackTime===null || time>lastCallbackTime);
+          const advanced = count !== null && count > latestQuality || Number.isFinite(time) && (lastCallbackTime===null || time>lastCallbackTime);
           if (count !== null) latestQuality = count;
           if (Number.isFinite(time)) lastCallbackTime = Math.max(lastCallbackTime ?? -1,time);
           if (advanced && video.readyState >= 2) {
@@ -113,10 +113,16 @@
             try { output(video,video.videoWidth,video.videoHeight,undefined); }
             catch(error) { onError('WebRTC 绘制失败：'+error.message); }
           }
-          if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(paintVideo);
         };
-        if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(paintVideo);
-        else timer = setInterval(paintVideo,33);
+        const frameCallback = (now,metadata) => {
+          paintVideo(now,metadata);
+          if(!closed)video.requestVideoFrameCallback(frameCallback);
+        };
+        if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(frameCallback);
+        // Offscreen video callbacks may stop despite continued decoding. Poll
+        // the independent non-dropped frame counter too; a timer tick alone
+        // never counts as a new picture and cannot mask suppressed decoding.
+        timer = setInterval(paintVideo,33);
       }
     }
     return {
@@ -146,7 +152,7 @@
             await pc.setRemoteDescription({type:message.descriptionType,sdp:message.sdp});
             if (closed) return;
             offered=true; for (const candidate of remoteCandidates) await pc.addIceCandidate(candidate); remoteCandidates=[];
-            const answer=await pc.createAnswer(); if(closed)return; await pc.setLocalDescription(answer);
+            const answer=await pc.createAnswer(); if(closed)return; await pc.setLocalDescription(answer);if(closed)return;
             sendSignal({type:'rtc-answer',sdp:pc.localDescription.sdp,generation:config.generation});
             answerSent=true;for(const candidate of localCandidates)sendSignal(candidate);localCandidates=[];
           } else if (message.type === 'rtc-candidate') {

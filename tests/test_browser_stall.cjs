@@ -3,7 +3,7 @@ const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('nod
 const protocol=require('../web/protocol.js');
 function fixture(quality=true) {
   let now=0,video,decoder,draws=0,lastCallback,ident=0,decodedImages=[],closedImages=0;
-  const frames=new Map(),elements=[];
+  const frames=new Map(),elements=[],intervals=[];
   class Peer { constructor(){this.connectionState='new';} close(){} }
   class Decoder {constructor(options){this.options=options;this.decodeQueueSize=0;this.state='configured';decoder=this;}configure(){}decode(){}close(){this.state='closed';}}
   const document={createElement(tag){
@@ -17,7 +17,7 @@ function fixture(quality=true) {
   }};
   const window={VideoDecoder:Decoder,RTCPeerConnection:Peer,createImageBitmap:true,isSecureContext:true,Worker:true,WebAssembly};
   const context={window,document,ShowcaseProtocol:protocol,VideoDecoder:Decoder,RTCPeerConnection:Peer,Blob,ImageData:class{},
-    performance:{now:()=>now},setInterval(){return 1;},clearInterval(){},
+    performance:{now:()=>now},setInterval(fn){intervals.push(fn);return intervals.length;},clearInterval(){},
     requestAnimationFrame(fn){frames.set(++ident,fn);return ident;},cancelAnimationFrame(id){frames.delete(id);},
     createImageBitmap:()=>new Promise(resolve=>decodedImages.push(resolve))};
   vm.runInNewContext(fs.readFileSync(require.resolve('../web/renderers.js'),'utf8'),context);
@@ -27,6 +27,7 @@ function fixture(quality=true) {
     onFrame(){output++;},onError(message){errors.push(message);},requestKey(){},sendSignal(){}});
   return {create,errors,advance(t){now=t;},get video(){return video;},get decoder(){return decoder;},
     callback(mediaTime,number){lastCallback?.(now,{mediaTime,presentedFrames:number});},
+    poll(){for(const fn of intervals)fn();},
     frame(timestamp){const frame={timestamp,displayWidth:640,displayHeight:360,close(){closedImages++;}};decoder.options.output(frame);return frame;},
     flush(){const callbacks=[...frames.values()];frames.clear();for(const fn of callbacks)fn();},
     image(){const resolve=decodedImages.shift();resolve({width:640,height:360,close(){closedImages++;}});},
@@ -40,6 +41,17 @@ function fixture(quality=true) {
   assert.equal(rtc.stats().drawnFrames,1);assert.equal(rtc.stats().frameCallbackCount,900);
   assert(rtc.stats().lastDrawAgeMs>17000,'callbacks must not reset the last actual draw');
   frozen.video.total++;frozen.callback(0,1300);assert.equal(rtc.stats().drawnFrames,2,'independent non-dropped progress remains usable');rtc.close();
+  const offscreen=fixture(),polled=offscreen.create('webrtc');
+  offscreen.video.total=1;offscreen.callback(0,1);
+  for(let n=0;n<100;n++)offscreen.poll();
+  assert.equal(polled.stats().drawnFrames,1,'poll ticks alone must not claim new pictures');
+  offscreen.video.total=2;offscreen.poll();
+  assert.equal(polled.stats().drawnFrames,2,'decoding may continue without offscreen frame callbacks');
+  offscreen.video.total++;offscreen.video.dropped=1;offscreen.poll();
+  assert.equal(polled.stats().drawnFrames,2,'polling must not count dropped pictures');
+  offscreen.callback(.1,2);
+  assert.equal(polled.stats().drawnFrames,3,'advancing frame media time remains usable if quality counters lag');
+  polled.close();offscreen.video.total++;offscreen.poll();assert.equal(polled.stats().drawnFrames,3);
   const timestamps=fixture(false),legacy=timestamps.create('webrtc');
   timestamps.callback(0,1);timestamps.callback(0,2);timestamps.callback(0,3);timestamps.callback(.1,4);timestamps.callback(0,5);
   assert.equal(legacy.stats().drawnFrames,2);legacy.close();

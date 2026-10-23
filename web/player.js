@@ -7,7 +7,7 @@
   let desired=true, active=false, displayed=false, fill=true, config=null, renderer=null, media=null, control=null;
   let epoch=0, retry=0, reconnectTimer=null, socketTimer=null, startupTimer=null, statusBusy=false, pointer=null;
   let pendingMove=null, moveFrame=null, signals=[], lastKeyRequest=-Infinity, failures=[], server=null, lastDrawSource=0;
-  const metrics={received:0,bytes:0,drawn:0,reconnects:0,recoveries:0,lastReason:'首次连接',fallbackReason:null,lastDrawAt:null};
+  const metrics={received:0,bytes:0,drawn:0,reconnects:0,recoveries:0,lastReason:'首次连接',fallbackReason:null,lastDrawAt:null,lastFailure:null};
   const state=message=>{$('state').textContent=message;};
   const notice=message=>{$('notice').textContent=message;$('notice').hidden=!message;};
   function send(object) {
@@ -53,6 +53,7 @@
   }
   function recover(reason) {
     if(!desired)return;metrics.recoveries++;metrics.lastReason=reason;
+    metrics.lastFailure={reason,renderer:renderer?.stats() ?? null,receiver:server};
     const now=performance.now();failures=failures.filter(t=>now-t<30000);failures.push(now);
     if(mode!=='jpeg') {
       metrics.fallbackReason=`${backends.labels[mode]}：${reason}`;mode='jpeg';$('renderer').value=mode;
@@ -172,7 +173,7 @@
   let rateAt=performance.now(),rateReceived=0,rateBytes=0,rateDrawn=0,rates={receivedFps:0,presentedFps:null,bitrateMbps:0};
   function diagnosticSnapshot() {
     return {app:'Showcase+',version:server?.version || '等待接收机',build:server?.build || '',entry:location.origin,
-      renderer:mode,rendererLabel:backends.labels[mode],fallbackReason:metrics.fallbackReason,
+      renderer:mode,rendererLabel:backends.labels[mode],fallbackReason:metrics.fallbackReason,lastFailure:metrics.lastFailure,
       resolution:config?`${config.width} × ${config.height}`:'等待视频',...rates,...renderer?.stats(),
       receivedFrames:metrics.received,recoveryCount:metrics.recoveries,reconnectCount:metrics.reconnects,lastReason:metrics.lastReason,
       documentVisibility:document.visibilityState || (document.hidden?'hidden':'visible'),posterVisible:!poster.hidden,displayed,
