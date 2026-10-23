@@ -84,7 +84,8 @@
   let pendingMove = null, moveFrame = null;
   let statusBusy = false, active = false, lastFrame = 0, lastKeyRequest = 0, retry = 0, failureTimes = [];
   const metrics = {received: 0, bytes: 0, presented: 0, frameSignal: '不可用', recoveries: 0, reconnects: 0, lastReason: '首次连接', server: null,
-    lastPresentedAt: null, presentedMediaTime: null, browserPresentedFrames: null, lastPlayError: null, pauseCount: 0};
+    lastPresentedAt: null, presentedMediaTime: null, browserPresentedFrames: null, lastPlayError: null, pauseCount: 0,
+    frameCallbacks: 0, repeatedFrameCallbacks: 0, lastFrameCallbackAt: null};
   const playError = error => { metrics.lastPlayError = {name: error.name || 'Error', message: error.message || String(error)}; };
   const state = message => { $('state').textContent = message; };
   const notice = message => { $('notice').textContent = message; $('notice').hidden = !message; };
@@ -154,20 +155,48 @@
     let previous = null, cursor = 0, sequence = 0, lastMicros = null, lastKey = 0, flushTimer = null;
     let lastPosition = 0, progressedAt = performance.now(), lastInputAt = 0, lastSeekAt = -Infinity;
     let inputCount = 0, progressedInput = 0, seekAttempts = 0, frameCallback = null, qualityFrames = 0;
-    let keyTimes = [], trimBefore = 0;
+    let keyTimes = [], trimBefore = 0, lastMediaTime = null;
+    metrics.lastPresentedAt = metrics.lastFrameCallbackAt = null;
+    metrics.presentedMediaTime = metrics.browserPresentedFrames = null;
+    metrics.frameSignal = '不可用';
     const hasFrameCallback = typeof video.requestVideoFrameCallback === 'function';
     const markProgress = () => {
       // A single picture produced by our own seek is not sustained playback.
       if (performance.now() - lastSeekAt < 500) return;
       progressedAt = performance.now(); progressedInput = inputCount; seekAttempts = 0;
     };
+    const observeProgress = (mediaTimeAdvanced = false) => {
+      const quality = video.getVideoPlaybackQuality?.();
+      const hasQuality = quality && Number.isFinite(quality.totalVideoFrames) &&
+        Number.isFinite(quality.droppedVideoFrames) && quality.totalVideoFrames >= quality.droppedVideoFrames;
+      let frames = 0;
+      if (hasQuality) {
+        // totalVideoFrames includes drops, including frames dropped before
+        // decode. Callback counts alone can keep advancing on a frozen video.
+        const count = quality.totalVideoFrames - quality.droppedVideoFrames;
+        frames = Math.max(0, count - qualityFrames); qualityFrames = count;
+        metrics.frameSignal = '浏览器非丢弃帧计数';
+      } else if (hasFrameCallback && lastMediaTime !== null) {
+        frames = mediaTimeAdvanced ? 1 : 0;
+        metrics.frameSignal = '画面时间戳推进';
+      } else if (!hasFrameCallback && !video.seeking && video.currentTime > lastPosition + 0.005) {
+        markProgress(); // Legacy timeline fallback cannot supply a frame rate.
+      }
+      if (frames > 0) {
+        metrics.presented += frames; metrics.lastPresentedAt = performance.now(); markProgress();
+        if (!waitingKey && source.readyState === 'open' && video.readyState >= 2) showFrame();
+      }
+    };
     const onFrame = (_, metadata) => {
       if (closed) return;
-      metrics.lastPresentedAt = performance.now();
+      metrics.frameCallbacks++; metrics.lastFrameCallbackAt = performance.now();
       metrics.presentedMediaTime = metadata?.mediaTime ?? null;
       metrics.browserPresentedFrames = metadata?.presentedFrames ?? null;
-      metrics.presented++; metrics.frameSignal = '画面提交回调'; markProgress();
-      if (!waitingKey && source.readyState === 'open' && video.readyState >= 2) showFrame();
+      const time = metadata?.mediaTime;
+      const advanced = Number.isFinite(time) && time >= 0 && (lastMediaTime === null || time > lastMediaTime);
+      if (advanced) lastMediaTime = time;
+      else if (Number.isFinite(time)) metrics.repeatedFrameCallbacks++;
+      observeProgress(advanced);
       frameCallback = video.requestVideoFrameCallback(onFrame);
     };
     if (hasFrameCallback) frameCallback = video.requestVideoFrameCallback(onFrame);
@@ -175,17 +204,7 @@
       if (closed || failed || !video.buffered.length) return;
       const now = performance.now(), ranges = video.buffered;
       const start = ranges.start(ranges.length - 1), end = ranges.end(ranges.length - 1);
-      if (!hasFrameCallback) {
-        const quality = video.getVideoPlaybackQuality?.();
-        if (quality) {
-          const count = quality.totalVideoFrames - quality.droppedVideoFrames;
-          if (count > qualityFrames) {
-            metrics.presented += count - qualityFrames; markProgress();
-            if (!waitingKey && source.readyState === 'open' && video.readyState >= 2) showFrame();
-          }
-          qualityFrames = Math.max(0, count); metrics.frameSignal = '浏览器帧计数';
-        } else if (!video.seeking && video.currentTime > lastPosition + 0.005) markProgress();
-      }
+      observeProgress();
       const receiving = inputCount - progressedInput >= 3 && now - lastInputAt < 1500;
       const stuck = receiving && now - progressedAt > 1000;
       if (stuck && ((seekAttempts >= 2 && now - lastSeekAt > 2000) || (video.seeking && now - progressedAt > 5000))) {
@@ -434,8 +453,8 @@
     $('fit').textContent = fill ? '显示：填满' : '显示：等比';
   };
   $('menu').onclick = () => { const bar = $('toolbar'); bar.hidden = !bar.hidden; };
-  let rateAt = performance.now(), rateReceived = 0, ratePresented = 0, rateBytes = 0;
-  let rates = {receivedFps: 0, presentedFps: null, bitrateMbps: 0};
+  let rateAt = performance.now(), rateReceived = 0, ratePresented = 0, rateBytes = 0, rateCallbacks = 0;
+  let rates = {receivedFps: 0, presentedFps: null, frameCallbackFps: 0, bitrateMbps: 0};
   function diagnosticSnapshot() {
     const quality = video.getVideoPlaybackQuality?.();
     return {app: 'Showcase+', version: metrics.server?.version || '等待接收机', build: metrics.server?.build || '', entry: location.origin,
@@ -447,7 +466,10 @@
       documentVisibility: document.visibilityState || (document.hidden ? 'hidden' : 'visible'),
       videoPaused: video.paused, videoSeeking: video.seeking, videoReadyState: video.readyState,
       posterVisible: !poster.hidden, displayed,
-      videoCurrentTime: video.currentTime, decodedFrames: quality?.totalVideoFrames ?? null, droppedFrames: quality?.droppedVideoFrames ?? null,
+      videoCurrentTime: video.currentTime, totalVideoFrames: quality?.totalVideoFrames ?? null, droppedFrames: quality?.droppedVideoFrames ?? null,
+      nonDroppedFrames: quality ? Math.max(0, quality.totalVideoFrames - quality.droppedVideoFrames) : null,
+      frameCallbackCount: metrics.frameCallbacks, repeatedFrameCallbacks: metrics.repeatedFrameCallbacks,
+      lastFrameCallbackAgeMs: metrics.lastFrameCallbackAt === null ? null : Math.round(performance.now() - metrics.lastFrameCallbackAt),
       lastPresentedAgeMs: metrics.lastPresentedAt === null ? null : Math.round(performance.now() - metrics.lastPresentedAt),
       presentedMediaTime: metrics.presentedMediaTime, browserPresentedFrames: metrics.browserPresentedFrames,
       pauseCount: metrics.pauseCount, lastPlayError: metrics.lastPlayError,
@@ -460,8 +482,9 @@
     if (seconds <= 0) return;
     rates = {receivedFps: +((metrics.received - rateReceived) / seconds).toFixed(1),
       presentedFps: metrics.frameSignal === '不可用' ? null : +((metrics.presented - ratePresented) / seconds).toFixed(1),
+      frameCallbackFps: +((metrics.frameCallbacks - rateCallbacks) / seconds).toFixed(1),
       bitrateMbps: +((metrics.bytes - rateBytes) * 8 / seconds / 1e6).toFixed(2)};
-    rateAt = now; rateReceived = metrics.received; ratePresented = metrics.presented; rateBytes = metrics.bytes;
+    rateAt = now; rateReceived = metrics.received; ratePresented = metrics.presented; rateBytes = metrics.bytes; rateCallbacks = metrics.frameCallbacks;
     renderDiagnostics();
   }, 1000);
   $('diagnostics').onclick = () => { $('diagnostic-panel').hidden = !$('diagnostic-panel').hidden; renderDiagnostics(); };

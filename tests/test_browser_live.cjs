@@ -106,7 +106,7 @@ const packet = bytes => {
     await page.waitForFunction(() => {
       const text=document.querySelector('#diagnostic-data').textContent;
       if(!text)return false;const d=JSON.parse(text);return d.receivedFps>0 && d.presentedFps>0 && d.version==='test' &&
-        d.videoPaused===false && d.videoCurrentTime>0 && d.decodedFrames>0 && d.documentVisibility==='visible' &&
+        d.videoPaused===false && d.videoCurrentTime>0 && d.totalVideoFrames>0 && d.nonDroppedFrames>0 && d.frameCallbackFps>0 && d.documentVisibility==='visible' &&
         d.lastPresentedAgeMs!==null && d.presentedMediaTime>0;
     });
     // Public HTTP IPs may lack navigator.clipboard: exercise the copy fallback.
