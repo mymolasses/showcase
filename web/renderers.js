@@ -158,7 +158,7 @@
         return {renderer:mode,inputFrames:inputCount,drawnFrames:mode==='mjpeg'?null:outputCount,droppedFrames:dropped,
           waitingKey:mode==='jpeg'||mode==='mjpeg'||mode==='webrtc'?false:waitingKey,
           decodeQueue:decoder?.decodeQueueSize ?? softwareQueue.length+inFlight,
-          lastDrawAgeMs:lastOutputAt===null?null:Math.round(performance.now()-lastOutputAt),
+          lastDrawAgeMs:lastOutputAt===null?null:Math.round(performance.now()-lastOutputAt),lastDrawTimestamp:lastTimestamp,
           lastInputAgeMs:lastInputAt?Math.round(performance.now()-lastInputAt):null,
           frameCallbackCount:callbackCount,presentedMediaTime:lastCallbackTime,
           totalVideoFrames:quality?.totalVideoFrames ?? null,videoDroppedFrames:quality?.droppedVideoFrames ?? null,

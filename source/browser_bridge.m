@@ -222,7 +222,8 @@ static void handle_http(SCBrowserClient *c) {
             @"version": @SHOWCASE_RELEASE_VERSION, @"build": @SHOWCASE_BUILD_NUMBER, @"receivedFrames": @(receivedFrames), @"timestampFallbacks": @(timestampFallbacks), @"viewers": @(viewers), @"controllers": @(controllers),
             @"mediaQueueBytes": @(queued), @"congestionRecoveries": @(congestionRecoveries),
             @"frameAgeMs": @(lastFrameAt ? (browser_now() - lastFrameAt) * 1000 : -1),
-            @"renderers": @[@"jpeg",@"mjpeg",@"webcodecs",@"software",@"webrtc"], @"jpegSequence":@(jpegSequence)} mutableCopy];
+            @"renderers": @[@"jpeg",@"mjpeg",@"webcodecs",@"software",@"webrtc"], @"jpegSequence":@(jpegSequence),
+            @"videoTimelineMicros":@(timelineMicros)} mutableCopy];
         [state addEntriesFromDictionary:showcase_jpeg_stats()]; [state addEntriesFromDictionary:showcase_rtc_stats()];
         http_reply(c, 200, @"application/json", [NSJSONSerialization dataWithJSONObject:state options:0 error:NULL]); return;
     }

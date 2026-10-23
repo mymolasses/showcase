@@ -22,6 +22,11 @@ static ShowcaseJPEGOutput publish;
 static VTDecompressionSessionRef decoder;
 static CMVideoFormatDescriptionRef format;
 static double lastEncoded;
+static CVImageBufferRef pendingImage;
+static CMTime pendingImageTime;
+static uint32_t pendingImageGeneration;
+static bool imageScheduled;
+static uint64_t lastEncodedMicros;
 
 static double jpeg_now(void) {
     struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
@@ -38,17 +43,13 @@ static void dispose_decoder(void) {
     }
     if (format) { CFRelease(format); format = NULL; }
 }
-static void picture(void *unused, void *ref, OSStatus status, VTDecodeInfoFlags flags,
-                    CVImageBufferRef image, CMTime pts, CMTime duration) {
-    (void)unused; (void)ref; (void)flags; (void)duration;
+static void encode_picture(CVImageBufferRef image, CMTime pts, uint32_t stream) {
     @autoreleasepool {
-        if (status || !image) { record_error([NSString stringWithFormat:@"JPEG decoder: %d", (int)status]); return; }
-        double now = jpeg_now();
         pthread_mutex_lock(&jpegLock);
-        decoded++; bool current = wantedGeneration == decodingGeneration && publish;
+        bool current = wantedGeneration == stream && publish;
+        if (current) lastEncoded = jpeg_now();
         pthread_mutex_unlock(&jpegLock);
-        if (!current || now - lastEncoded < 1.0 / 15) return;
-        lastEncoded = now;
+        if (!current) return;
         CVPixelBufferLockBaseAddress(image, kCVPixelBufferLock_ReadOnly);
         size_t width = CVPixelBufferGetWidth(image), height = CVPixelBufferGetHeight(image);
         CGColorSpaceRef rgb = CGColorSpaceCreateDeviceRGB();
@@ -80,11 +81,33 @@ static void picture(void *unused, void *ref, OSStatus status, VTDecodeInfoFlags 
         CGColorSpaceRelease(rgb); CVPixelBufferUnlockBaseAddress(image, kCVPixelBufferLock_ReadOnly);
         if (!success || !data.length || data.length > 2 * 1024 * 1024) { record_error(@"JPEG encoding failed or image too large"); return; }
         pthread_mutex_lock(&jpegLock);
-        current = wantedGeneration == decodingGeneration && publish;
-        ShowcaseJPEGOutput output = publish; if (current) encoded++;
+        current = wantedGeneration == stream && publish;
+        uint64_t micros = (uint64_t)MAX(0,CMTimeConvertScale(pts,1000000,kCMTimeRoundingMethod_Default).value);
+        ShowcaseJPEGOutput output = publish; if (current) { encoded++; lastEncodedMicros = micros; }
         pthread_mutex_unlock(&jpegLock);
-        if (current) output(decodingGeneration, (uint64_t)MAX(0, CMTimeGetSeconds(pts) * 1000000), data);
+        if (current) output(stream, micros, data);
     }
+}
+static void picture(void *unused, void *ref, OSStatus status, VTDecodeInfoFlags flags,
+                    CVImageBufferRef image, CMTime pts, CMTime duration) {
+    (void)unused; (void)ref; (void)flags; (void)duration;
+    if (status || !image) { record_error([NSString stringWithFormat:@"JPEG decoder: %d",(int)status]); return; }
+    pthread_mutex_lock(&jpegLock); decoded++;
+    if (wantedGeneration != decodingGeneration || !publish) { pthread_mutex_unlock(&jpegLock); return; }
+    if (pendingImage) CVPixelBufferRelease(pendingImage);
+    pendingImage = CVPixelBufferRetain(image); pendingImageTime = pts; pendingImageGeneration = decodingGeneration;
+    if (!imageScheduled) {
+        imageScheduled = true;
+        double wait = MAX(0,lastEncoded + 1.0/15 - jpeg_now());
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(wait*NSEC_PER_SEC)),queue,^{
+            pthread_mutex_lock(&jpegLock);
+            CVImageBufferRef latest = pendingImage; CMTime time = pendingImageTime; uint32_t stream = pendingImageGeneration;
+            pendingImage = NULL; imageScheduled = false;
+            pthread_mutex_unlock(&jpegLock);
+            if (latest) { encode_picture(latest,time,stream); CVPixelBufferRelease(latest); }
+        });
+    }
+    pthread_mutex_unlock(&jpegLock);
 }
 static bool configure_decoder(NSData *avcc) {
     const uint8_t *p = avcc.bytes; size_t size = avcc.length, at = 6;
@@ -111,7 +134,9 @@ static bool configure_decoder(NSData *avcc) {
     return status == noErr;
 }
 static void run_worker(void) {
+    unsigned batch = 0;
     for (;;) @autoreleasepool {
+        if (++batch > 8) { dispatch_async(queue,^{ run_worker(); }); return; }
         pthread_mutex_lock(&jpegLock);
         bool configure = configurationPending;
         NSData *config = nextConfig; uint32_t next = nextGeneration;
@@ -121,7 +146,8 @@ static void run_worker(void) {
         if (!configure && !frame) { scheduled = false; pthread_mutex_unlock(&jpegLock); return; }
         pthread_mutex_unlock(&jpegLock);
         if (configure) {
-            dispose_decoder(); decodingGeneration = next; lastEncoded = -1;
+            dispose_decoder();
+            pthread_mutex_lock(&jpegLock); decodingGeneration = next; lastEncoded = -1; pthread_mutex_unlock(&jpegLock);
             if (config && !configure_decoder(config)) record_error(@"Cannot initialize JPEG decoder");
         }
         if (!frame || !decoder || [frame[@"generation"] unsignedIntValue] != decodingGeneration) continue;
@@ -146,6 +172,7 @@ void showcase_jpeg_configure(uint32_t generation, NSData *avcc, ShowcaseJPEGOutp
     pthread_mutex_lock(&jpegLock);
     wantedGeneration = nextGeneration = generation; nextConfig = avcc; publish = output;
     configurationPending = true; needsKey = true; [pending removeAllObjects]; pendingBytes = 0;
+    if (pendingImage) { CVPixelBufferRelease(pendingImage); pendingImage = NULL; }
     if (!pending) pending = [NSMutableArray array]; schedule_locked();
     pthread_mutex_unlock(&jpegLock);
 }
@@ -169,6 +196,7 @@ NSDictionary *showcase_jpeg_stats(void) {
     pthread_mutex_lock(&jpegLock);
     NSDictionary *state = @{@"jpegEncodedFrames": @(encoded), @"jpegDecodedFrames": @(decoded),
         @"jpegDroppedInputs": @(dropped), @"jpegErrors": @(errors), @"jpegQueueBytes": @(pendingBytes),
-        @"jpegLastError": lastError ?: @"", @"jpegMaxFps": @15, @"jpegMaxWidth": @1280};
+        @"jpegLastError": lastError ?: @"", @"jpegMaxFps": @15, @"jpegMaxWidth": @1280,
+        @"jpegLastEncodedMicros":@(lastEncodedMicros), @"jpegImagePending":@(pendingImage!=NULL)};
     pthread_mutex_unlock(&jpegLock); return state;
 }

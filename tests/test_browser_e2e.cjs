@@ -122,6 +122,7 @@ const domain = 'carplay.showcase.test';
     const initialTime = await page.evaluate(()=>showcaseDiagnostics().drawnFrames);
     helper.stdin.write('s');
     await page.waitForTimeout(2300);
+    await page.waitForFunction(()=>{const d=showcaseDiagnostics();return d.receiver.jpegLastEncodedMicros===d.receiver.videoTimelineMicros && d.lastDrawTimestamp===d.receiver.jpegSequence;},null,{timeout:6000});
     helper.stdin.write('r');
     await page.waitForTimeout(100);
     assert.equal(mediaConnections, 1);
