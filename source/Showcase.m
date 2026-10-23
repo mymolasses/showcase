@@ -1793,11 +1793,6 @@ static BOOL pid_alive(pid_t pid) {
 static BOOL wait_for_bt_ready_or_exit(pid_t pid, int seconds) {
     int loops = seconds * 10;
     for (int i = 0; i < loops; i++) {
-        if (access(BT_READY_PATH, F_OK) == 0) {
-            ip_log("[BT] ready sentinel observed at %s", BT_READY_PATH);
-            return YES;
-        }
-
         int status = 0;
         pid_t done = waitpid(pid, &status, WNOHANG);
         if (done == pid) {
@@ -1818,6 +1813,10 @@ static BOOL wait_for_bt_ready_or_exit(pid_t pid, int seconds) {
                 return NO;
             }
             ip_log("[BT] waitpid while waiting for ready sentinel failed: %s", strerror(errno));
+        }
+        if (done == 0 && access(BT_READY_PATH, F_OK) == 0) {
+            ip_log("[BT] ready sentinel observed at %s", BT_READY_PATH);
+            return YES;
         }
         usleep(100000);
     }
@@ -4555,12 +4554,11 @@ static pid_t reusable_baa_broker(void) {
                              unsupported:NO];
         return;
     }
-    if (!wait_for_pid_alive(self.carplayBtPid, 8, "carplay_bt")) {
-        [self failBluetoothWithReason:
-            @"The Bluetooth helper exited during setup."
-                             unsupported:YES];
-        return;
-    }
+    /* The ready sentinel is the hardware check; do not first sleep for a
+     * fixed survival window. A paired sender can finish authentication and
+     * request hotspot details during those eight seconds, before our
+     * AirPlay listener and Bonjour services exist. The readiness wait also
+     * detects helper exit, so it covers both cases without delaying handoff. */
     if (!wait_for_bt_ready_or_exit(self.carplayBtPid, BT_READY_SECONDS)) {
         /* On some rootless boots BlueTool releases the controller after its
          * launchd job has already exited. BTstack then accepts a client and

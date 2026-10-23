@@ -66,6 +66,7 @@ jobs:
           python3 tests/test_display_profile.py
           python3 tests/test_control_connect.py
           python3 tests/test_bluetooth_recovery.py
+          python3 tests/test_bluetooth_startup.py
           python3 tests/test_localization.py
           python3 tests/test_browser_bridge.py
           clang tests/test_browser_network.c source/browser_network.c -o "$RUNNER_TEMP/test-browser-network"
@@ -101,7 +102,7 @@ jobs:
             build/browser-rootless/*.deb \
             build/browser-rootless/SHA256SUMS \
             build/browser-rootless/build-provenance.json \
-            docs/BROWSER5.md docs/PLAYBACK_DIAGNOSTICS.md docs/PLAYBACK_REVIEW.md --clobber
+            docs/BROWSER5.md docs/PLAYBACK_DIAGNOSTICS.md docs/PLAYBACK_REVIEW.md docs/WIFI_HANDOFF.md --clobber
           gh release edit "$RELEASE_TAG" --draft=false --prerelease \
             --title "$app_name $RELEASE_TAG" \
             --notes-file docs/RELEASE_NOTES.md
