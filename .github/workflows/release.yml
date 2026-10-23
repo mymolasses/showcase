@@ -88,6 +88,7 @@ jobs:
           python3 tests/test_bluetooth_recovery.py
           python3 tests/test_bluetooth_startup.py
           python3 tests/test_localization.py
+          python3 tests/test_browser_packaging.py
           python3 tests/test_browser_bridge.py
           clang tests/test_browser_network.c source/browser_network.c -o "$RUNNER_TEMP/test-browser-network"
           "$RUNNER_TEMP/test-browser-network"
@@ -108,8 +109,49 @@ jobs:
           python3 tools/build_browser_rootless.py --upstream-deb "$RUNNER_TEMP/upstream.deb"
           cd build/browser-rootless
           shasum -a 256 -c SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: showcase-deb
+          path: build/browser-rootless/
+          if-no-files-found: error
+      - uses: actions/cache/save@v4
+        if: ${{ always() && steps.native-cache.outputs.cache-hit != 'true' }}
+        with:
+          path: build/browser-native
+          key: ${{ steps.native-cache.outputs.cache-primary-key }}
+
+  package-install:
+    needs: release
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && !inputs.publish && github.sha || inputs.tag || github.ref }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: showcase-deb
+          path: build/browser-rootless
+      - name: Verify real dpkg fresh and upgrade unpack
+        run: |
+          set -euo pipefail
+          sudo python3 tests/test_browser_packaging.py --deb "build/browser-rootless/com.rostane.showcase_$(cat VERSION)_iphoneos-arm64.deb"
+
+  publish:
+    needs: [release, package-install]
+    if: ${{ github.event_name == 'push' || (inputs.publish && !inputs.compile_only) }}
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: showcase-deb
+          path: build/browser-rootless
       - name: Publish verified release assets
-        if: ${{ github.event_name == 'push' || (inputs.publish && !inputs.compile_only) }}
         shell: bash
         run: |
           set -euo pipefail
@@ -128,8 +170,3 @@ jobs:
             --title "$app_name $RELEASE_TAG" \
             --notes-file docs/RELEASE_NOTES.md
           gh release view "$RELEASE_TAG" --json url,assets
-      - uses: actions/cache/save@v4
-        if: ${{ always() && steps.native-cache.outputs.cache-hit != 'true' }}
-        with:
-          path: build/browser-native
-          key: ${{ steps.native-cache.outputs.cache-primary-key }}

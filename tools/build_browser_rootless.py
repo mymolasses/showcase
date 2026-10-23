@@ -96,6 +96,8 @@ def tar_gz(entries):
 
 
 def write_deb(path, control, payload):
+    add_parent_directories(control)
+    add_parent_directories(payload)
     output = bytearray(b'!<arch>\n')
     for name, data in [('debian-binary', b'2.0\n'), ('control.tar.gz', tar_gz(control)), ('data.tar.gz', tar_gz(payload))]:
         # Debian packages use the simple ar name field, without GNU '/' suffix.
@@ -105,6 +107,44 @@ def write_deb(path, control, payload):
         if len(data) % 2:
             output.extend(b'\n')
     path.write_bytes(output)
+
+
+def add_parent_directories(entries):
+    """dpkg creates directories from archive entries, unlike permissive tar.
+
+    Every directory must precede its children in the sorted archive. Retain
+    existing directory metadata and reject a file used as an ancestor.
+    """
+    for name in list(entries):
+        path = PurePosixPath(name)
+        if path.is_absolute() or '..' in path.parts or str(path) != name or name == '.':
+            raise ValueError('Unsafe/noncanonical package path: ' + name)
+        for parent in reversed(path.parents):
+            directory = str(parent)
+            if directory == '.':
+                continue
+            if directory in entries:
+                if not entries[directory][0].isdir():
+                    raise ValueError('Package parent is not a directory: ' + directory)
+                continue
+            member = tarfile.TarInfo(directory)
+            member.type = tarfile.DIRTYPE
+            member.mode = 0o755
+            entries[directory] = member, None
+
+
+def validate_directory_order(data):
+    """Audit serialized entries without silently synthesizing missing parents."""
+    directories = {'.'}
+    with tarfile.open(fileobj=io.BytesIO(data), mode='r:*') as archive:
+        for member in archive:
+            name = member.name.removeprefix('./')
+            path = PurePosixPath(name)
+            for parent in path.parents:
+                if str(parent) not in directories:
+                    raise ValueError('Missing or late package directory: ' + str(parent))
+            if member.isdir():
+                directories.add(name.rstrip('/'))
 
 
 def replace(entries, name, data, mode=None):
@@ -252,6 +292,8 @@ def main():
     # privilege bits and unchanged runtime bytes; never execute maintainer scripts.
     built = ar_members(output.read_bytes())
     assert built['debian-binary'] == b'2.0\n'
+    validate_directory_order(built['control.tar.gz'])
+    validate_directory_order(built['data.tar.gz'])
     installed = tar_members(built['data.tar.gz'])
     installed_control = tar_members(built['control.tar.gz'])
     for name, (member, data) in payload.items():
