@@ -22,8 +22,7 @@ const domain = 'carplay.showcase.test';
   let browser, server, helper, gateway;
   const certificate = useTLS ? fixtureTLS(work, domain) : null;
   try {
-    execFileSync('clang', ['-fobjc-arc', '-Wno-deprecated-declarations', '-framework', 'Foundation',
-      path.join(root, 'source/browser_bridge.m'), path.join(root, 'tests/browser_bridge_harness.m'), '-o', path.join(work, 'bridge')]);
+    require('./native_browser_fixture.cjs')(path.join(work,'bridge'));
     execFileSync('clang', ['-fobjc-arc', '-DSC_PROBE_TEST=1', '-Wno-deprecated-declarations', '-framework', 'Foundation', '-framework', 'Security',
       path.join(root,'source/browser_probe.m'),path.join(root,'source/browser_network.c'),path.join(root,'source/browser_web_tls.m'),'-o',path.join(work,'gateway')]);
     server = http.createServer((_, res) => { res.end('<!doctype html><title>Synthetic AVC fixture</title>'); });

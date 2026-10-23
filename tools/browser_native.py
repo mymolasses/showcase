@@ -47,7 +47,11 @@ def prepare(platform='macos'):
     run(['cmake', '-S', sources/'libdatachannel', '-B', rtc, *common, '-DUSE_MBEDTLS=ON', '-DUSE_NICE=OFF',
          '-DNO_EXAMPLES=ON', '-DNO_TESTS=ON', '-DNO_WEBSOCKET=ON', '-DNO_MEDIA=OFF',
          '-DBUILD_SHARED_DEPS_LIBS=OFF', '-DPREFER_SYSTEM_LIB=OFF', '-DCMAKE_PREFIX_PATH='+str(prefix),
-         '-DCMAKE_INSTALL_PREFIX='+str(prefix), '-DMBEDTLS_ROOT_DIR='+str(prefix)])
+         '-DCMAKE_INSTALL_PREFIX='+str(prefix), '-DMBEDTLS_ROOT_DIR='+str(prefix),
+         '-DMbedTLS_INCLUDE_DIR='+str(prefix/'include'),
+         '-DMbedTLS_LIBRARY='+str(prefix/'lib/libmbedtls.a'),
+         '-DMbedCrypto_LIBRARY='+str(prefix/'lib/libmbedcrypto.a'),
+         '-DMbedX509_LIBRARY='+str(prefix/'lib/libmbedx509.a')])
     run(['cmake', '--build', rtc, '--target', 'datachannel', '--parallel', jobs])
     # All inputs are pinned sources; retain the static dependency closure.
     libraries = [str(p.resolve()) for p in rtc.rglob('*.a') if p.name != 'libdatachannel-static.a']

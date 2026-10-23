@@ -134,6 +134,11 @@ static void drop_client(SCBrowserClient *c) {
     if ((c.role == 1 || c.role == 4) && c.transport <= 2 && c.transport > 0) { showcase_jpeg_reset(); jpegGeneration = 0; }
     if (c.transport == 3) showcase_rtc_stop();
 }
+static NSData *mjpeg_part(NSData *image) {
+    NSString *header = [NSString stringWithFormat:@"--showcase\r\nContent-Type: image/jpeg\r\nContent-Length: %lu\r\nX-Frame-Sequence: %llu\r\n\r\n",(unsigned long)image.length,(unsigned long long)jpegSequence];
+    NSMutableData *part = [[header dataUsingEncoding:NSUTF8StringEncoding] mutableCopy]; [part appendData:image];
+    [part appendBytes:"\r\n" length:2]; return part;
+}
 static void publish_jpeg(uint32_t stream, uint64_t micros, NSData *image) {
     pthread_mutex_lock(&browserLock);
     if (!running || !active || stream != generation || !configuration) { pthread_mutex_unlock(&browserLock); return; }
@@ -145,9 +150,7 @@ static void publish_jpeg(uint32_t stream, uint64_t micros, NSData *image) {
             NSMutableData *payload = [NSMutableData dataWithBytes:header length:sizeof(header)]; [payload appendData:image];
             packet = websocket_packet(payload,2);
         } else {
-            NSString *header = [NSString stringWithFormat:@"--showcase\r\nContent-Type: image/jpeg\r\nContent-Length: %lu\r\nX-Frame-Sequence: %llu\r\n\r\n",(unsigned long)image.length,(unsigned long long)jpegSequence];
-            NSMutableData *part = [[header dataUsingEncoding:NSUTF8StringEncoding] mutableCopy]; [part appendData:image];
-            [part appendBytes:"\r\n" length:2]; packet = part;
+            packet = mjpeg_part(image); c.lastMove = browser_now();
         }
         // Keep a partial packet plus the newest complete image. JPEG frames
         // are independently decodable; no keyframe chain needs preserving.
@@ -371,6 +374,11 @@ static void *browser_loop(void *unused) {
         for (NSUInteger i = 0; i < snapshot.count; i++) {
             SCBrowserClient *c = snapshot[i];
             if (![clients containsObject:c]) continue;
+            // Static screens have no new input. Refresh the same JPEG rarely
+            // to keep HTTP/TLS relays alive, without incrementing frame stats.
+            if (c.role == 4 && !c.output.count && latestJPEG && browser_now()-c.lastMove > 5) {
+                enqueue(c,mjpeg_part(latestJPEG)); c.lastMove = browser_now();
+            }
             short events = fds[i + 1].revents;
             if (events & (POLLERR | POLLHUP | POLLNVAL)) { drop_client(c); continue; }
             if (events & POLLIN) {

@@ -89,9 +89,11 @@ def main():
     with tempfile.TemporaryDirectory() as directory:
         work = Path(directory)
         fixture(work / 'fixture.bin')
-        subprocess.run(['clang', '-fobjc-arc', '-Wno-deprecated-declarations', '-framework', 'Foundation',
-                        str(ROOT / 'source/browser_bridge.m'), str(ROOT / 'tests/browser_bridge_harness.m'),
-                        '-o', str(work / 'bridge')], check=True)
+        sys.path.insert(0,str(ROOT/'tools'))
+        import browser_native
+        subprocess.run(['clang','-fobjc-arc','-Wno-deprecated-declarations','-framework','Foundation','-framework','Security',
+                        *browser_native.bridge_sources(),str(ROOT/'tests/browser_bridge_harness.m'),
+                        *browser_native.flags('macos'),'-o',str(work/'bridge')],check=True)
         with socket.socket() as reservation:
             reservation.bind(('127.0.0.1', 0))
             port = reservation.getsockname()[1]

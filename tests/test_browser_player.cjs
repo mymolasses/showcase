@@ -1,36 +1,18 @@
-/* SPDX-License-Identifier: GPL-3.0-or-later */
-const assert = require('node:assert/strict');
-const {integer, initMp4, fragment, mapPoint, checkFrame} = require('../web/player.js');
-const avcc = Uint8Array.from(Buffer.from('0142001effe100046742001e01000268ce', 'hex'));
-const sample = Uint8Array.from(Buffer.from('0000000265b8', 'hex'));
-function boxes(bytes) {
-  let at = 0; const result = [];
-  while (at < bytes.length) {
-    const size = Buffer.from(bytes).readUInt32BE(at);
-    assert(size >= 8 && at + size <= bytes.length);
-    result.push({name: Buffer.from(bytes.slice(at + 4, at + 8)).toString(), at, size}); at += size;
-  }
-  assert.equal(at, bytes.length); return result;
-}
-const init = initMp4(avcc, 1280, 720);
-assert.deepEqual(boxes(init).map(b => b.name), ['ftyp', 'moov']);
-assert(Buffer.from(init).includes(Buffer.from('avcC')));
-const frame = fragment(1, sample, true, 2 ** 32 + 90000, 3000);
-const layout = boxes(frame); assert.deepEqual(layout.map(b => b.name), ['moof', 'mdat']);
-const trun = Buffer.from(frame).indexOf('trun');
-assert.equal(Buffer.from(frame).readUInt32BE(trun + 12), layout[0].size + 8);
-const tfdt = Buffer.from(frame).indexOf('tfdt');
-assert.equal(Number(Buffer.from(frame).readBigUInt64BE(tfdt + 8)), 2 ** 32 + 90000);
-assert(checkFrame(sample));
-assert.throws(() => checkFrame(Uint8Array.from([0, 0, 0, 2, 0x41, 0xa0])), /B 帧/);
-assert.throws(() => checkFrame(sample.slice(0, -1)), /Invalid/);
-assert.throws(() => integer(4, -1)); assert.throws(() => integer(4, 2 ** 32));
-const rect = {left: 10, top: 20, width: 1000, height: 1000};
-assert.deepEqual(mapPoint(rect, 1280, 720, 510, 520, false), {x: 640, y: 360});
-assert.equal(mapPoint(rect, 1280, 720, 510, 30, false), null);
-assert.deepEqual(mapPoint(rect, 1280, 720, -10, 2000, true), {x: 0, y: 720});
-assert.equal(mapPoint({...rect, width: 0}, 1280, 720, 0, 0, false), null);
-console.log('PASS: MP4 initialization, sample offsets, 64-bit time, AVC validation/B-frame refusal, letterbox touch mapping');
-
-assert.deepEqual(mapPoint(rect, 1280, 720, 510, 30, false, true), {x: 640, y: 7});
-assert.deepEqual(mapPoint(rect, 1280, 720, 10, 1020, false, true), {x: 0, y: 720});
+const assert=require('node:assert/strict');
+const {mapPoint,nals,parameterSets,annexB,parsePacket}=require('../web/protocol.js');
+const config=Buffer.from('0142001effe100046742001e01000268ce','hex');
+assert.equal(parameterSets(config).length,2);
+assert.equal(Buffer.from(annexB(parameterSets(config))).toString('hex'),'000000016742001e0000000168ce');
+for(const data of [Buffer.alloc(0),config.subarray(0,8),Buffer.from('0142001effe1ffff','hex')])assert.throws(()=>parameterSets(data));
+const frame=Buffer.from('0000000265b8','hex');assert.equal(nals(frame)[0][0],0x65);
+assert.throws(()=>nals(Buffer.from('000000ff65','hex')));
+const packet=Buffer.alloc(14+frame.length);packet[0]=2;packet.writeUInt32BE(7,1);packet[5]=1;packet.writeBigUInt64BE(123456789n,6);frame.copy(packet,14);
+const data=packet.buffer.slice(packet.byteOffset,packet.byteOffset+packet.length);
+assert.equal(parsePacket(data).micros,123456789);assert.equal(parsePacket(data).key,true);
+packet[5]=0;assert.throws(()=>parsePacket(packet.buffer.slice(packet.byteOffset,packet.byteOffset+packet.length)));
+const rect={left:0,top:0,width:1000,height:1000};
+assert.equal(mapPoint(rect,1920,1080,500,10,false),null);
+assert.deepEqual(mapPoint(rect,1920,1080,500,500,false),{x:960,y:540});
+assert.deepEqual(mapPoint(rect,1920,1080,0,0,true),{x:0,y:0});
+assert.deepEqual(mapPoint(rect,1920,1080,1000,1000,true,true),{x:1920,y:1080});
+console.log('PASS: bounded AVC/config parsing, Annex-B conversion, media framing and fit/fill touch mapping');

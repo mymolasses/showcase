@@ -12,7 +12,7 @@ function fixture(connectReady = 1) {
   const elements = new Map(), frames = new Map(), timers = new Map(), intervals = new Map(), sockets = [];
   let ident = 0;
   const element = id => {
-    if (!elements.has(id)) elements.set(id, Object.assign(new Events(), {textContent:'',
+    if (!elements.has(id)) elements.set(id, Object.assign(new Events(), {textContent:'',replaceChildren(){},options:[],
       getBoundingClientRect:()=>({left:0,top:0,width:1000,height:500})}));
     return elements.get(id);
   };
@@ -31,6 +31,7 @@ function fixture(connectReady = 1) {
     getElementById:element, querySelector:()=>video, body:{classList:{toggle(){}}}, hidden:false});
   const initial = new Socket();
   const context = {window,document,WebSocket:Socket,location:{protocol:'http:',host:'fixture.test:8080'},
+    ShowcaseProtocol:require('../web/protocol.js'),ShowcaseRenderers:{labels:{jpeg:'JPEG'},unsupported:()=>null},
     performance:{now:()=>1000}, AbortController, fetch:async()=>({ok:true,json:async()=>({active:true,configured:true,viewers:0,controllers:0})}),
     setTimeout:(fn,delay)=>{timers.set(++ident,{fn,delay});return ident;},clearTimeout:id=>timers.delete(id),
     setInterval:(fn,delay)=>{intervals.set(++ident,{fn,delay});return ident;},clearInterval:id=>intervals.delete(id),
