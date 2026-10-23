@@ -13,6 +13,13 @@ const wire=(data,opcode=2)=>{
   let browser,timer,description,frames,jpegs,sequence=0,flowing=true;
   const media=new Set(),controls=new Set(),images=new Set(),sockets=new Set(),touches=[],errors=[];
   let connections=0;
+  const until=async(predicate,label)=>{
+    const deadline=Date.now()+5000;
+    while(!predicate()) {
+      if(Date.now()>=deadline)throw Error(label+': '+JSON.stringify(touches.slice(-12)));
+      await new Promise(resolve=>setTimeout(resolve,25));
+    }
+  };
   const config=()=>{const head=Buffer.alloc(9);head[0]=1;head.writeUInt32BE(7,1);head.writeUInt16BE(640,5);head.writeUInt16BE(360,7);return Buffer.concat([head,Buffer.from(description)]);};
   const server=http.createServer((req,res)=>{
     if(req.url==='/status'){res.setHeader('Content-Type','application/json');res.end(JSON.stringify({active:true,configured:true,generation:7,width:640,height:360,viewers:media.size+images.size,controllers:controls.size,version:'test',build:'fixture',frameAgeMs:33,receivedFrames:sequence,mediaQueueBytes:0}));return;}
@@ -81,25 +88,27 @@ const wire=(data,opcode=2)=>{
     };
     await ready('jpeg');assert.equal(await page.locator('input').count(),0);assert.equal(await page.locator('video').count(),0);
     await page.click('#menu');await page.click('#diagnostics');
-    const pixel=()=>page.locator('#display canvas').evaluate(c=>[...c.getContext('2d').getImageData(10,10,1,1).data]);
-    const a=await pixel();await page.waitForTimeout(170);const b=await pixel();
-    assert(a.some((value,i)=>value!==b[i]) || (await page.evaluate(()=>showcaseDiagnostics().drawnFrames))>6);
+    const initialFrames=await page.evaluate(()=>showcaseDiagnostics().drawnFrames);
+    await page.waitForFunction(count=>showcaseDiagnostics().drawnFrames>count+2,initialFrames,{timeout:5000});
     await page.click('#diagnostic-close');
     for(const mode of ['webcodecs','software','mjpeg','jpeg']) {
       await page.selectOption('#renderer',mode);await ready(mode);
       const before=await page.evaluate(()=>showcaseDiagnostics().drawnFrames);
-      await page.waitForTimeout(300);
-      if(mode!=='mjpeg')assert((await page.evaluate(()=>showcaseDiagnostics().drawnFrames))>before,'actual output must continue in '+mode);
+      if(mode!=='mjpeg')await page.waitForFunction(count=>showcaseDiagnostics().drawnFrames>count,before,{timeout:5000});
       else assert.equal(await page.locator('#display img').evaluate(img=>img.naturalWidth),640);
       const color=await page.evaluate(()=>{const source=document.querySelector('#display canvas,#display img');const c=document.createElement('canvas');c.width=c.height=1;const ctx=c.getContext('2d');ctx.drawImage(source,10,300,1,1,0,0,1,1);return [...ctx.getImageData(0,0,1,1).data];});
       assert(color[2]>color[0] && color[2]>70 && color[3]===255,'decoded pixels must match the blue fixture in '+mode+': '+color);
       assert.equal(await page.locator('#poster').isVisible(),false);
     }
     const rect=await page.locator('#surface').boundingBox();
+    const dragStart=touches.length;
     await page.mouse.move(rect.width/2,rect.height/2);await page.mouse.down();await page.mouse.move(rect.width*.8,rect.height*.8,{steps:6});await page.mouse.up();
-    await page.waitForTimeout(100);assert(touches.some(m=>m.phase===0 && m.x===320 && m.y===180));assert(touches.some(m=>m.phase===1));assert(touches.some(m=>m.phase===2));
-    await page.mouse.down();await page.waitForTimeout(1000);assert(touches.some(m=>m.type==='hold'));
-    await page.evaluate(()=>window.dispatchEvent(new Event('blur')));await page.mouse.up();await page.waitForTimeout(100);assert(touches.some(m=>m.type==='release'));
+    await until(()=>touches.slice(dragStart).some(m=>m.phase===2),'drag up must reach server');
+    const drag=touches.slice(dragStart);assert(drag.some(m=>m.phase===0 && m.x===320 && m.y===180));assert(drag.some(m=>m.phase===1));assert(drag.some(m=>m.phase===2));
+    const holdStart=touches.length;
+    await page.mouse.down();await page.waitForTimeout(1000);await until(()=>touches.slice(holdStart).some(m=>m.type==='hold'),'long-press hold must reach server');
+    const blurStart=touches.length;
+    await page.evaluate(()=>window.dispatchEvent(new Event('blur')));await page.mouse.up();await until(()=>touches.slice(blurStart).some(m=>m.type==='release'),'blur release must reach server');
     flowing=false;const stable=connections;await page.waitForTimeout(4000);assert.equal(connections,stable,'static screen must not churn connections');flowing=true;
     await page.click('#reconnect');await ready('jpeg');assert.equal(await page.locator('#poster').isVisible(),false);
     await page.click('#fit');assert.equal(await page.locator('#display canvas').evaluate(c=>getComputedStyle(c).objectFit),'contain');

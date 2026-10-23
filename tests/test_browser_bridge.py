@@ -154,8 +154,14 @@ def main():
             for mode in ('d', 'z', 'n'):
                 previous = status()
                 command(mode)
-                time.sleep(0.2)
                 current = status()
+                deadline = time.monotonic() + 3
+                while (current['receivedFrames'] <= previous['receivedFrames'] + 2 or
+                       mode != 'n' and current['timestampFallbacks'] <= previous['timestampFallbacks']):
+                    if time.monotonic() >= deadline:
+                        raise AssertionError(f'Media did not progress in mode {mode}: {previous} -> {current}')
+                    time.sleep(0.03)
+                    current = status()
                 assert current['receivedFrames'] > previous['receivedFrames'] + 2
                 if mode != 'n':
                     assert current['timestampFallbacks'] > previous['timestampFallbacks']
