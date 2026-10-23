@@ -3693,6 +3693,12 @@ static bool queue_touch_report(uint8_t phase, uint16_t x, uint16_t y,
 /* ── Touch reader thread — reads touch events from iPadPlay app via IPC ── */
 static bool g_touch_reader_running = false;
 
+static bool queue_local_touch_report(uint8_t phase, uint16_t x, uint16_t y,
+                                     uint8_t contact, uint64_t timestampNs) {
+    return g_browser_enabled ? showcase_browser_local_touch(phase, x, y, contact, timestampNs)
+                             : queue_touch_report(phase, x, y, contact, timestampNs);
+}
+
 static void touch_reader_func(void *arg) {
     int fd = (int)(intptr_t)arg;
     printf("[TOUCH] Reader started on fd=%d\n", fd);
@@ -3724,16 +3730,12 @@ static void touch_reader_func(void *arg) {
                 break;
             }
 
-            /* One input owner: a paired browser controller takes precedence
-             * over the receiver's local CarPlay surface. */
-            if (g_browser_enabled && showcase_browser_has_controller()) { free(payload); continue; }
-
             if (len == 5) {
                 /* Accept Beta 2 clients during package transition. */
                 uint8_t phase = payload[0];
                 uint16_t x = payload[1] | (payload[2] << 8);
                 uint16_t y = payload[3] | (payload[4] << 8);
-                queue_touch_report(phase, x, y, 0, 0);
+                queue_local_touch_report(phase, x, y, 0, 0);
                 touchCount++;
             } else if ((len % 14) == 0) {
                 for (uint32_t offset = 0; offset < len; offset += 14) {
@@ -3766,7 +3768,7 @@ static void touch_reader_func(void *arg) {
                         gestureLastY = y;
                         gestureMoves++;
                     }
-                    bool queued = queue_touch_report(
+                    bool queued = queue_local_touch_report(
                         phase, x, y, contact, timestampNs);
                     if (phase == 1 && queued) gestureQueuedMoves++;
                     touchCount++;
@@ -3869,6 +3871,7 @@ static void touch_reader_func(void *arg) {
         }
     }
 
+    if (g_browser_enabled) showcase_browser_local_touch(3, 0, 0, 0, 0);
     printf("[TOUCH] Reader exiting (%d events processed)\n", touchCount);
     fflush(stdout);
     g_touch_reader_running = false;

@@ -32,15 +32,20 @@ function fixture() {
     setTimeout:(fn,delay)=>{tasks.set(++ident,{at:now+delay,fn});return ident;},clearTimeout:id=>tasks.delete(id),
     setInterval:(fn,delay)=>{intervals.set(++ident,{fn,delay});return ident;},clearInterval:id=>intervals.delete(id)};
   const text=fs.readFileSync(require.resolve('../web/player.js'),'utf8').replace(/\r\n/g,'\n')
-    .replace('  connect();\n})();',`  globalThis.begin=()=>{config=globalThis.info;media={readyState:1,close(){}};control={readyState:1,close(){},send:sendTestMessage};player=makePlayer(config);};
+    .replace('  connect();\n})();',`  globalThis.begin=()=>{config=globalThis.info;lastKeyRequest=-Infinity;media={readyState:1,close(){},send(){}};control={readyState:1,close(){},send:sendTestMessage};player=makePlayer(config);};
       globalThis.current=()=>player;globalThis.getMetrics=()=>metrics;\n})();`);
   vm.runInNewContext(text,context);context.info=info;context.begin();
   const advance=t=>{now=t;let safety=0;for(;;){const ready=[...tasks].find(([,v])=>v.at<=now);if(!ready)break;assert(++safety<100);tasks.delete(ready[0]);ready[1].fn();}};
   advance(0);
   return {video,messages,advance,feed:(n,isKey=false)=>context.current()?.feed(isKey?key:delta,isKey,Math.round(n*1e6/30)),
-    tick:()=>{for(const t of [...intervals.values()])if(t.delay===250)t.fn();},metrics:()=>context.getMetrics(),
+    tick:()=>{for(const t of [...intervals.values()])if(t.delay===250)t.fn();},heartbeat:()=>{for(const t of [...intervals.values()])if(t.delay===2000)t.fn();},metrics:()=>context.getMetrics(),
     forceRange:(a,b)=>{start=a;end=b;},stats:()=>({seeks,removes,sources,history:video.position-start})};
 }
+// A lost initial IDR must be requested again even while delta frames arrive.
+const startup=fixture();
+for(let n=0;n<180;n++){startup.advance(n*1000/30);startup.feed(n);if(n%60===0)startup.heartbeat();}
+assert(startup.messages.filter(m=>m.type==='keyframe').length>=3, 'delta-only startup must retry IDR instead of remaining black');
+assert.equal(startup.metrics().recoveries,0,'waiting for IDR must not churn MSE');
 // A short new buffer must recover, while an idle/static screen must stay put.
 const short=fixture();short.forceRange(0,.4);short.video.position=.1;short.advance(100);short.tick();
 short.advance(1100);short.feed(0,true);short.advance(1120);short.feed(1);short.advance(1140);short.feed(2);short.tick();

@@ -20,4 +20,7 @@ void showcase_browser_config(uint16_t width, uint16_t height,
                              const uint8_t *avcc, size_t length);
 void showcase_browser_frame(uint64_t senderTime32_32, bool key,
                             const uint8_t *avccFrame, size_t length);
-bool showcase_browser_has_controller(void);
+/* Local and browser gestures share the same lock and HID callback. The most
+ * recent down cancels the previous owner's gesture; idle viewers own nothing. */
+bool showcase_browser_local_touch(uint8_t phase, uint16_t x, uint16_t y,
+                                  uint8_t contact, uint64_t hostNanos);

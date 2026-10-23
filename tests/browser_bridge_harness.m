@@ -43,6 +43,10 @@ int main(int argc, char **argv) { @autoreleasepool {
     while (run) { @autoreleasepool {
         char command[16]; ssize_t n = read(STDIN_FILENO, command, sizeof(command));
         for (ssize_t i = 0; i < n; i++) {
+            if (command[i] == 'l') showcase_browser_local_touch(0, 40, 50, 0, 0);
+            if (command[i] == 'm') showcase_browser_local_touch(1, 60, 70, 0, 0);
+            if (command[i] == 'u') showcase_browser_local_touch(2, 60, 70, 0, 0);
+            if (command[i] == 'a') showcase_browser_local_touch(3, 0, 0, 0, 0);
             if (command[i] == 'd' || command[i] == 'z' || command[i] == 'n') timing = command[i];
             if (command[i] == 'q') run = false;
             if (command[i] == 's') flowing = false;

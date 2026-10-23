@@ -72,6 +72,7 @@ jobs:
           "$RUNNER_TEMP/test-browser-network"
           node tests/test_browser_player.cjs
           node tests/test_browser_stall.cjs
+          node tests/test_browser_input.cjs
           node tests/test_browser_live.cjs
           node tests/test_browser_probe.cjs
           node tests/test_browser_e2e.cjs
@@ -100,7 +101,7 @@ jobs:
             build/browser-rootless/*.deb \
             build/browser-rootless/SHA256SUMS \
             build/browser-rootless/build-provenance.json \
-            docs/BROWSER5.md docs/PLAYBACK_DIAGNOSTICS.md --clobber
+            docs/BROWSER5.md docs/PLAYBACK_DIAGNOSTICS.md docs/PLAYBACK_REVIEW.md --clobber
           gh release edit "$RELEASE_TAG" --draft=false --prerelease \
             --title "$app_name $RELEASE_TAG" \
             --notes-file docs/RELEASE_NOTES.md

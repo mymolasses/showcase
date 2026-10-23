@@ -78,20 +78,39 @@
   }
   const $ = id => document.getElementById(id);
   const video = document.querySelector('video'), surface = $('surface'), poster = $('poster');
-  let media = null, control = null, reconnectTimer = null, desired = true, epoch = 0;
+  let media = null, control = null, reconnectTimer = null, socketTimer = null, desired = true, epoch = 0;
   let fill = true;
   let config = null, player = null, pointer = null, displayed = false;
+  let pendingMove = null, moveFrame = null;
   let statusBusy = false, active = false, lastFrame = 0, lastKeyRequest = 0, retry = 0, failureTimes = [];
-  const metrics = {received: 0, bytes: 0, presented: 0, frameSignal: '不可用', recoveries: 0, reconnects: 0, lastReason: '首次连接', server: null};
+  const metrics = {received: 0, bytes: 0, presented: 0, frameSignal: '不可用', recoveries: 0, reconnects: 0, lastReason: '首次连接', server: null,
+    lastPresentedAt: null, presentedMediaTime: null, browserPresentedFrames: null, lastPlayError: null, pauseCount: 0};
+  const playError = error => { metrics.lastPlayError = {name: error.name || 'Error', message: error.message || String(error)}; };
   const state = message => { $('state').textContent = message; };
   const notice = message => { $('notice').textContent = message; $('notice').hidden = !message; };
-  const send = object => { if (control?.readyState !== WebSocket.OPEN) return false; control.send(JSON.stringify(object)); return true; };
+  const send = object => {
+    if (control?.readyState !== WebSocket.OPEN) return false;
+    // Do not let a stalled radio accumulate seconds of obsolete gestures.
+    if (control.bufferedAmount > 4096) {
+      release(false); scheduleReconnect('控制通道积压，重新连接'); return false;
+    }
+    try { control.send(JSON.stringify(object)); return true; }
+    catch (_) { release(false); scheduleReconnect('控制通道发送失败'); return false; }
+  };
   function requestKey() {
     const now = performance.now();
     if (now - lastKeyRequest >= 2000 && send({type: 'keyframe'})) lastKeyRequest = now;
   }
-  function release() {
-    if (pointer !== null) { send({type: 'release'}); pointer = null; }
+  function release(notify = true) {
+    if (moveFrame !== null) cancelAnimationFrame(moveFrame);
+    moveFrame = pendingMove = null;
+    const previous = pointer; pointer = null;
+    // Clear our state before releasing capture, which can synchronously emit
+    // lostpointercapture. Failure/reconnect paths must not recursively send.
+    if (previous !== null) {
+      if (surface.hasPointerCapture(previous)) surface.releasePointerCapture(previous);
+      if (notify) send({type: 'release'});
+    }
   }
   function snapshot() {
     if (video.readyState < 2 || !video.videoWidth) return;
@@ -107,6 +126,11 @@
   }
   function stop(message) {
     desired = false; closeSockets(); state(message); notice(message);
+  }
+  function showFrame() {
+    if (displayed || !player || !config) return;
+    displayed = true; poster.hidden = true; retry = 0; notice('');
+    state(`CarPlay · ${config.width} × ${config.height} · 单指触控`);
   }
   function recover(message) {
     const now = performance.now(); failureTimes = failureTimes.filter(t => now - t < 30000);
@@ -137,9 +161,13 @@
       if (performance.now() - lastSeekAt < 500) return;
       progressedAt = performance.now(); progressedInput = inputCount; seekAttempts = 0;
     };
-    const onFrame = () => {
+    const onFrame = (_, metadata) => {
       if (closed) return;
+      metrics.lastPresentedAt = performance.now();
+      metrics.presentedMediaTime = metadata?.mediaTime ?? null;
+      metrics.browserPresentedFrames = metadata?.presentedFrames ?? null;
       metrics.presented++; metrics.frameSignal = '画面提交回调'; markProgress();
+      if (!waitingKey && source.readyState === 'open' && video.readyState >= 2) showFrame();
       frameCallback = video.requestVideoFrameCallback(onFrame);
     };
     if (hasFrameCallback) frameCallback = video.requestVideoFrameCallback(onFrame);
@@ -151,7 +179,10 @@
         const quality = video.getVideoPlaybackQuality?.();
         if (quality) {
           const count = quality.totalVideoFrames - quality.droppedVideoFrames;
-          if (count > qualityFrames) { metrics.presented += count - qualityFrames; markProgress(); }
+          if (count > qualityFrames) {
+            metrics.presented += count - qualityFrames; markProgress();
+            if (!waitingKey && source.readyState === 'open' && video.readyState >= 2) showFrame();
+          }
           qualityFrames = Math.max(0, count); metrics.frameSignal = '浏览器帧计数';
         } else if (!video.seeking && video.currentTime > lastPosition + 0.005) markProgress();
       }
@@ -167,7 +198,7 @@
       }
       lastPosition = video.currentTime;
       video.playbackRate = 1;
-      if (video.paused) video.play().catch(() => { if (!closed) notice('请轻点画面以允许播放'); });
+      if (video.paused) video.play().catch(error => { if (!closed) { playError(error); notice('请轻点画面以允许播放'); } });
     };
     const fail = message => {
       if (!closed && !failed) { failed = true; setTimeout(() => { if (!closed) recover(message); }, 300); }
@@ -282,7 +313,16 @@
     const endpoint = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
     control = new WebSocket(endpoint + '/control');
     media = new WebSocket(endpoint + '/media'); media.binaryType = 'arraybuffer';
-    control.onopen = () => { if (current === epoch) { lastKeyRequest = -Infinity; requestKey(); } };
+    const opened = () => {
+      if (current === epoch && media?.readyState === WebSocket.OPEN && control?.readyState === WebSocket.OPEN) {
+        clearTimeout(socketTimer); socketTimer = null;
+      }
+    };
+    socketTimer = setTimeout(() => {
+      if (current === epoch) scheduleReconnect('视频或控制连接超时');
+    }, 8000);
+    media.onopen = opened;
+    control.onopen = () => { if (current === epoch) { opened(); lastKeyRequest = -Infinity; requestKey(); } };
     media.onmessage = event => {
       if (current !== epoch || !(event.data instanceof ArrayBuffer)) return;
       try {
@@ -308,20 +348,19 @@
     media.onerror = control.onerror = () => {};
   }
   function closeSockets() {
+    clearTimeout(socketTimer); socketTimer = null;
     clearTimeout(reconnectTimer); reconnectTimer = null; release(); ++epoch;
     for (const socket of [media, control]) if (socket) { socket.onclose = socket.onmessage = null; socket.close(); }
     media = control = null; resetPlayer(); active = false;
   }
-  video.addEventListener('playing', () => {
-    displayed = true; poster.hidden = true; retry = 0; notice('');
-    state(`CarPlay · ${config?.width || video.videoWidth} × ${config?.height || video.videoHeight} · 单指触控`);
-  });
+  video.addEventListener('playing', showFrame);
   video.addEventListener('error', () => { if (player) recover('视频播放错误'); });
+  video.addEventListener('pause', () => { metrics.pauseCount++; });
   function point(event, clamp) {
     return config && mapPoint(surface.getBoundingClientRect(), config.width, config.height, event.clientX, event.clientY, clamp, fill);
   }
   surface.addEventListener('pointerdown', event => {
-    video.play().catch(() => {});
+    video.play().catch(playError);
     if (!active || !displayed || pointer !== null || event.pointerType === 'mouse' && event.button !== 0) return;
     const p = point(event, false); if (!p) return;
     event.preventDefault();
@@ -332,18 +371,33 @@
   surface.addEventListener('pointermove', event => {
     if (event.pointerId !== pointer) return;
     event.preventDefault(); const p = point(event, true);
-    if (p) send({type: 'touch', phase: 1, ...p, generation: config.generation});
+    if (p) {
+      pendingMove = {type: 'touch', phase: 1, ...p, generation: config.generation};
+      if (moveFrame === null) moveFrame = requestAnimationFrame(() => {
+        const message = pendingMove; moveFrame = pendingMove = null;
+        if (pointer !== null && message) send(message);
+      });
+    }
   });
   function lift(event) {
     if (event.pointerId !== pointer) return;
     const p = point(event, true);
+    // A quick swipe can finish before the next animation frame. Preserve its
+    // last move before up; cancellation must instead discard queued moves.
+    if (event.type === 'pointerup' && pendingMove) {
+      const message = pendingMove;
+      cancelAnimationFrame(moveFrame); moveFrame = pendingMove = null;
+      if (!send(message)) { release(); return; }
+    }
     if (p && config) send({type: 'touch', phase: event.type === 'pointerup' ? 2 : 3, ...p, generation: config.generation});
     release();
   }
   for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) surface.addEventListener(type, lift);
   surface.addEventListener('contextmenu', event => event.preventDefault());
-  window.addEventListener('blur', release);
+  window.addEventListener('blur', () => release());
+  window.addEventListener('resize', () => release());
   window.addEventListener('pagehide', closeSockets);
+  window.addEventListener('pageshow', event => { if (event.persisted && desired) connect(); });
   document.addEventListener('visibilitychange', () => { if (document.hidden) closeSockets(); else if (desired) connect(); });
   setInterval(() => { if (pointer !== null && config) send({type: 'hold', generation: config.generation}); }, 200);
   setInterval(() => {
@@ -351,7 +405,10 @@
     if (media?.readyState === WebSocket.OPEN) media.send('{"type":"ping"}');
     // Static screens are normal. Request an occasional IDR, without clearing
     // the existing frame, disabling input or hammering the sender every 2 s.
-    if (desired && config && performance.now() - lastFrame > 10000 && performance.now() - lastKeyRequest > 10000) requestKey();
+    // Delta frames can keep arriving after a lost IDR. They must not suppress
+    // startup/recovery requests just because lastFrame is recent.
+    if (desired && config && (player?.stats().waitingKey ||
+        performance.now() - lastFrame > 10000 && performance.now() - lastKeyRequest > 10000)) requestKey();
   }, 2000);
   setInterval(async () => {
     if (!desired || document.hidden || statusBusy || media?.readyState !== WebSocket.OPEN) return;
@@ -380,10 +437,21 @@
   let rateAt = performance.now(), rateReceived = 0, ratePresented = 0, rateBytes = 0;
   let rates = {receivedFps: 0, presentedFps: null, bitrateMbps: 0};
   function diagnosticSnapshot() {
+    const quality = video.getVideoPlaybackQuality?.();
     return {app: 'Showcase+', version: metrics.server?.version || '等待接收机', build: metrics.server?.build || '', entry: location.origin,
       resolution: config ? `${config.width} × ${config.height}` : '等待视频', ...rates, presentationSignal: metrics.frameSignal,
       ...player?.stats(), receivedFrames: metrics.received, recoveryCount: metrics.recoveries, reconnectCount: metrics.reconnects,
       lastReason: metrics.lastReason, sourceFrameAgeMs: metrics.server?.frameAgeMs ?? null,
+      controlBufferedBytes: control?.bufferedAmount ?? 0,
+      inputOwner: metrics.server?.inputOwner ?? 'unknown',
+      documentVisibility: document.visibilityState || (document.hidden ? 'hidden' : 'visible'),
+      videoPaused: video.paused, videoSeeking: video.seeking, videoReadyState: video.readyState,
+      posterVisible: !poster.hidden, displayed,
+      videoCurrentTime: video.currentTime, decodedFrames: quality?.totalVideoFrames ?? null, droppedFrames: quality?.droppedVideoFrames ?? null,
+      lastPresentedAgeMs: metrics.lastPresentedAt === null ? null : Math.round(performance.now() - metrics.lastPresentedAt),
+      presentedMediaTime: metrics.presentedMediaTime, browserPresentedFrames: metrics.browserPresentedFrames,
+      pauseCount: metrics.pauseCount, lastPlayError: metrics.lastPlayError,
+      videoError: video.error ? {code: video.error.code, message: video.error.message} : null,
       serverQueueBytes: metrics.server?.mediaQueueBytes ?? null, congestionRecoveries: metrics.server?.congestionRecoveries ?? null};
   }
   function renderDiagnostics() { if (!$('diagnostic-panel').hidden) $('diagnostic-data').textContent = JSON.stringify(diagnosticSnapshot(), null, 2); }

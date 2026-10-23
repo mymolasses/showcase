@@ -40,6 +40,7 @@
 @property double heard;
 @property double touched;
 @property double lastMove;
+@property double moveTokens;
 @property size_t offset;
 @property size_t queued;
 @property (nonatomic, strong) NSMutableData *input;
@@ -64,6 +65,8 @@ static uint64_t congestionRecoveries;
 static NSMutableArray<SCBrowserClient *> *clients;
 static ShowcaseBrowserTouch touchCallback;
 static ShowcaseBrowserResync resyncCallback;
+static bool localPressed;
+static uint16_t localX, localY;
 
 static double browser_now(void) {
     struct timespec t;
@@ -98,7 +101,12 @@ static void release_touch(SCBrowserClient *c) {
     if (c.pressed && touchCallback) touchCallback(3, c.x, c.y, 0, browser_nanos());
     c.pressed = false;
 }
+static void release_local(void) {
+    if (localPressed && touchCallback) touchCallback(3, localX, localY, 0, browser_nanos());
+    localPressed = false;
+}
 static void invalidate_stream(void) {
+    release_local();
     configuration = nil; videoWidth = videoHeight = 0;
     haveTime = false; lastFrameAt = 0; generation++;
     for (SCBrowserClient *c in clients) {
@@ -172,7 +180,9 @@ static void handle_http(SCBrowserClient *c) {
             if (other.role == 1) { viewers++; queued += other.queued; }
             if (other.role == 2) controllers++;
         }
-        NSDictionary *state = @{@"active": @(active), @"configured": @(configuration != nil),
+        NSString *owner = localPressed ? @"receiver" : @"none";
+        for (SCBrowserClient *other in clients) if (other.role == 2 && other.pressed) owner = @"browser";
+        NSDictionary *state = @{@"active": @(active), @"configured": @(configuration != nil), @"inputOwner": owner,
             @"width": @(videoWidth), @"height": @(videoHeight), @"generation": @(generation),
             @"version": @SHOWCASE_RELEASE_VERSION, @"build": @SHOWCASE_BUILD_NUMBER, @"receivedFrames": @(receivedFrames), @"timestampFallbacks": @(timestampFallbacks), @"viewers": @(viewers), @"controllers": @(controllers),
             @"mediaQueueBytes": @(queued), @"congestionRecoveries": @(congestionRecoveries),
@@ -203,7 +213,6 @@ static void handle_http(SCBrowserClient *c) {
     c.upgradePending = true;
     c.role = role; c.needsKey = true;
     fprintf(stderr, "[BROWSER] %s connected\n", role == 1 ? "media" : "control");
-    if (role == 2 && touchCallback) touchCallback(3, 0, 0, 0, browser_nanos());
     if (role == 1 && configuration) { enqueue(c, configuration); wantKey = true; }
     /* HTTP pipelining and WS payload before upgrade are not supported. */
     [c.input setLength:0];
@@ -238,9 +247,17 @@ static void handle_control(SCBrowserClient *c, NSData *payload) {
     c.heard = now;
     if (phase == 0 && c.pressed) { release_touch(c); return; }
     if (phase != 0 && !c.pressed) return;
-    if (phase == 1 && now - c.lastMove < 1.0 / 120) { c.touched = now; return; }
+    if (phase == 0) release_local();
+    if (phase == 0) { c.moveTokens = 12; c.lastMove = now; }
+    if (phase == 1) {
+        // TCP may deliver several healthy samples together. A small token
+        // bucket preserves that path while still bounding sustained traffic.
+        c.moveTokens = MIN(12.0, c.moveTokens + (now - c.lastMove) * 120);
+        c.lastMove = now;
+        if (c.moveTokens < 1) { c.touched = now; return; }
+        c.moveTokens -= 1;
+    }
     c.x = (uint16_t)llround(x); c.y = (uint16_t)llround(y); c.touched = now;
-    if (phase == 1) c.lastMove = now;
     bool sent = touchCallback && touchCallback((uint8_t)phase, c.x, c.y, 0, browser_nanos());
     if (phase == 0) c.pressed = sent;
     if (phase >= 2) c.pressed = false;
@@ -372,6 +389,7 @@ void showcase_browser_stop(void) {
     if (!wasRunning) return;
     pthread_join(browserThread, NULL);
     pthread_mutex_lock(&browserLock);
+    release_local();
     for (SCBrowserClient *c in [clients copy]) drop_client(c);
     close(listener); listener = -1; clients = nil; configuration = nil; decoderConfiguration = nil;
     pthread_mutex_unlock(&browserLock);
@@ -471,9 +489,19 @@ void showcase_browser_frame(uint64_t timestamp, bool key, const uint8_t *bytes, 
     }
     pthread_mutex_unlock(&browserLock);
 }
-bool showcase_browser_has_controller(void) {
+bool showcase_browser_local_touch(uint8_t phase, uint16_t x, uint16_t y,
+                                  uint8_t contact, uint64_t hostNanos) {
     pthread_mutex_lock(&browserLock);
-    bool result = false;
-    for (SCBrowserClient *c in clients) if (c.role == 2 && active) result = true;
-    pthread_mutex_unlock(&browserLock); return result;
+    if (!running || !active || !configuration || phase > 3 || x > videoWidth || y > videoHeight) {
+        release_local(); pthread_mutex_unlock(&browserLock); return false;
+    }
+    if (phase == 0) {
+        release_local();
+        for (SCBrowserClient *c in clients) if (c.role == 2) release_touch(c);
+    } else if (!localPressed) { pthread_mutex_unlock(&browserLock); return false; }
+    localX = x; localY = y;
+    bool sent = touchCallback && touchCallback(phase, x, y, contact, hostNanos ?: browser_nanos());
+    if (phase == 0) localPressed = sent;
+    if (phase >= 2) localPressed = false;
+    pthread_mutex_unlock(&browserLock); return sent;
 }

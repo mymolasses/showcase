@@ -19,7 +19,7 @@ const packet = bytes => {
 (async () => {
   let browser, timer, frames, config, sequence = 0, paused = false, timestampMode = 'normal';
   const media = new Set(), sockets = new Set(), errors = [];
-  let connections = 0;
+  let connections = 0, keyRequests = 0;
   const server = http.createServer((req, res) => {
     if (req.url === '/status') {
       res.setHeader('Content-Type', 'application/json');
@@ -36,7 +36,20 @@ const packet = bytes => {
     const accept = crypto.createHash('sha1').update(req.headers['sec-websocket-key'] + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
     socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
     socket.on('error', () => {});
-    socket.on('data', () => {});
+    let input=Buffer.alloc(0);
+    socket.on('data', bytes => {
+      input=Buffer.concat([input,bytes]);
+      while(input.length>=2) {
+        const opcode=input[0]&15, size=input[1]&127;
+        if(size>=126 || !(input[1]&128)) { socket.destroy();return; }
+        if(input.length<6+size)return;
+        const mask=input.subarray(2,6), data=Buffer.alloc(size);
+        for(let i=0;i<size;i++)data[i]=input[6+i]^mask[i%4];
+        input=input.subarray(6+size);
+        if(opcode===8){socket.end();return;}
+        if(opcode===1 && JSON.parse(data).type==='keyframe')keyRequests++;
+      }
+    });
     if (req.url === '/media') {
       media.add(socket); connections++; sequence = 0;
       socket.write(packet(config)); socket.on('close', () => media.delete(socket));
@@ -46,6 +59,9 @@ const packet = bytes => {
     server.listen(0, '127.0.0.1'); await once(server, 'listening');
     browser = await chromium.launch({executablePath: process.env.CHROME || undefined, headless: true});
     const page = await browser.newPage({viewport: {width: 1200, height: 900}});
+    // Some embedded browsers can submit frames without a usable playing
+    // notification. A retained reconnect poster must not obscure that video.
+    await page.addInitScript(() => document.addEventListener('playing', event => event.stopImmediatePropagation(), true));
     // Encode in a secure loopback page before loading the production player.
     await page.goto(`http://127.0.0.1:${server.address().port}/status`);
     const encoded = await page.evaluate(async () => {
@@ -75,6 +91,9 @@ const packet = bytes => {
       const head = Buffer.alloc(14); head[0] = 2; head.writeUInt32BE(1, 1); head[5] = +frame.key;
       head.writeBigUInt64BE(BigInt(timestampMode === 'normal' ? Math.round(sequence * 1e6 / 30) : timestampMode === 'repeat' ? 1000000 : 0), 6);
       sequence++;
+      // Ignore the first IDR request while delta frames continue arriving.
+      // The production page must retry instead of waiting forever in black.
+      if(frame.key && keyRequests<2)return;
       for (const socket of media) socket.write(packet(Buffer.concat([head, Buffer.from(frame.bytes)])));
     }, 33);
     page.on('pageerror', error => errors.push(error.message));
@@ -82,10 +101,13 @@ const packet = bytes => {
     assert.equal(await page.locator('input').count(), 0);
     const decoded = () => page.locator('video').evaluate(v => v.getVideoPlaybackQuality().totalVideoFrames);
     await page.waitForFunction(() => document.querySelector('video').currentTime > 1);
+    assert(keyRequests>=2,'startup must retry the missing IDR');
     await page.click('#menu'); await page.click('#diagnostics');
     await page.waitForFunction(() => {
       const text=document.querySelector('#diagnostic-data').textContent;
-      if(!text)return false;const d=JSON.parse(text);return d.receivedFps>0 && d.presentedFps>0 && d.version==='test';
+      if(!text)return false;const d=JSON.parse(text);return d.receivedFps>0 && d.presentedFps>0 && d.version==='test' &&
+        d.videoPaused===false && d.videoCurrentTime>0 && d.decodedFrames>0 && d.documentVisibility==='visible' &&
+        d.lastPresentedAgeMs!==null && d.presentedMediaTime>0;
     });
     // Public HTTP IPs may lack navigator.clipboard: exercise the copy fallback.
     await page.evaluate(()=>Object.defineProperty(navigator,'clipboard',{value:undefined,configurable:true}));
@@ -111,6 +133,8 @@ const packet = bytes => {
     assert.equal(await page.locator('video').evaluate(v => getComputedStyle(v).objectFit), 'contain');
     await page.click('#reconnect');
     await page.waitForFunction(() => document.querySelector('video').currentTime > 0.5);
+    assert.equal(await page.locator('#poster').isVisible(),false,'new frames must remove the retained reconnect image');
+    assert.equal(await page.locator('#notice').isVisible(),false,'new frames must enable the player without playing events');
     assert.equal(connections, 2, 'No automatic socket churn during playback');
     assert.deepEqual(errors, []);
     console.log('PASS: real Chrome continuous decode, repeated/backwards PTS, starvation recovery, automatic passwordless entry, full viewport, fit toggle, reconnect');

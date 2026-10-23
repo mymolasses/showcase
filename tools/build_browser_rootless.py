@@ -221,6 +221,7 @@ def main():
     replace(payload, 'var/jb/usr/share/showcase/TEST_TESLA_BROWSER4.md', (ROOT / 'docs/TEST_TESLA_BROWSER4.md').read_bytes(), 0o644)
     replace(payload, 'var/jb/usr/share/showcase/BROWSER5.md', (ROOT / 'docs/BROWSER5.md').read_bytes(), 0o644)
     replace(payload, 'var/jb/usr/share/showcase/PLAYBACK_DIAGNOSTICS.md', (ROOT / 'docs/PLAYBACK_DIAGNOSTICS.md').read_bytes(), 0o644)
+    replace(payload, 'var/jb/usr/share/showcase/PLAYBACK_REVIEW.md', (ROOT / 'docs/PLAYBACK_REVIEW.md').read_bytes(), 0o644)
     md5 = ''.join(hashlib.md5(data).hexdigest() + '  ' + name + '\n'
                   for name, (member, data) in sorted(payload.items()) if member.isfile())
     replace(control, 'md5sums', md5.encode(), 0o644)

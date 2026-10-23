@@ -85,7 +85,7 @@ const domain = 'carplay.showcase.test';
     await page.goto(useTLS ? `https://${domain}:${tlsPort}/` : `http://127.0.0.1:${frontPort}/`);
     assert.equal(await page.locator('input').count(), 0);
     await page.waitForFunction(() => { const v = document.querySelector('video'); return v.videoWidth === 1920 && v.currentTime > 0.1 && v.readyState >= 2; }, null, {timeout: 15000});
-    await until(() => output.includes('TOUCH 3'), 'browser control ownership');
+    await until(() => stderr.includes('[BROWSER] control connected'), 'browser control channel');
     // Status polling must enable input after actual frames arrive.
     await page.waitForTimeout(1200);
     await page.click('#menu');
@@ -100,6 +100,18 @@ const domain = 'carplay.showcase.test';
     await page.mouse.move(rect.x + rect.width * 0.6, rect.y + rect.height * 0.6, {steps: 8});
     await page.mouse.up();
     await until(() => /TOUCH 0 960 540/.test(output) && /TOUCH 1 /.test(output) && /TOUCH 2 /.test(output), 'pointer -> production touch callback');
+    // A stationary long press survives the server's 750ms deadman because
+    // the production page sends holds. Blur must then cancel it immediately.
+    await page.mouse.move(rect.x + rect.width / 2, rect.y + rect.height / 2);
+    let downs = output.match(/TOUCH 0 /g)?.length || 0;
+    await page.mouse.down();
+    await until(() => (output.match(/TOUCH 0 /g)?.length || 0) > downs, 'long-press down');
+    const cancels = output.match(/TOUCH 3 /g)?.length || 0;
+    await page.waitForTimeout(1300);
+    assert.equal(output.match(/TOUCH 3 /g)?.length || 0, cancels, 'long press must remain down');
+    await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+    await until(() => (output.match(/TOUCH 3 /g)?.length || 0) > cancels, 'blur -> production touch cancel');
+    await page.mouse.up();
     // A 1.5s route check must not block HTTP or the active media/control relay.
     const diagURL=useTLS ? `https://${domain}:${tlsPort}/probe.json` : `http://127.0.0.1:${frontPort}/probe.json`;
     for(let i=0;i<8;i++) {

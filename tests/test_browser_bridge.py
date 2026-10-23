@@ -65,11 +65,18 @@ class WS:
             size = struct.unpack('!Q', self.read(8))[0]
         return self.read(size)
 
-    def send(self, message):
+    @staticmethod
+    def packet(message):
         data = json.dumps(message).encode()
         mask = os.urandom(4)
         header = bytes([0x81, 0x80 | len(data)]) if len(data) < 126 else bytes([0x81, 0xfe]) + struct.pack('!H', len(data))
-        self.sock.sendall(header + mask + bytes(v ^ mask[i % 4] for i, v in enumerate(data)))
+        return header + mask + bytes(v ^ mask[i % 4] for i, v in enumerate(data))
+
+    def send(self, message):
+        self.sock.sendall(self.packet(message))
+
+    def send_batch(self, messages):
+        self.sock.sendall(b''.join(self.packet(m) for m in messages))
 
     def close(self):
         self.sock.close()
@@ -118,8 +125,13 @@ def main():
             connection = http.client.HTTPConnection('127.0.0.1', port)
             connection.request('GET', '/', headers={'Host': f'attacker.invalid:{port}'})
             assert connection.getresponse().status == 400; connection.close()
+            command('l'); assert wait_event('TOUCH 0') == 'TOUCH 0 40 50'
             control = WS(port, '/control'); sockets.append(control)
-            wait_event('TOUCH 3')  # input ownership transfer cancels local touch
+            time.sleep(0.1)
+            assert not any(e.startswith('TOUCH 3') for e in list(events.queue)), 'idle browser must not cancel receiver touch'
+            assert status()['inputOwner'] == 'receiver'
+            command('mu'); wait_event('TOUCH 1'); wait_event('TOUCH 2')
+            assert status()['inputOwner'] == 'none'
             second = WS(port, '/control', expected=409); second.close()
             media = WS(port, '/media'); sockets.append(media)
             packet = media.receive()
@@ -156,6 +168,25 @@ def main():
             touch(0); assert wait_event('TOUCH 0') == 'TOUCH 0 80 90'
             touch(1, 120, 100); assert wait_event('TOUCH 1') == 'TOUCH 1 120 100'
             touch(2, 120, 100); wait_event('TOUCH 2')
+            # TCP can deliver a healthy drag's samples in one read. Rate limiting
+            # by parse-time spacing used to discard every move after the first.
+            touch(0); wait_event('TOUCH 0')
+            control.send_batch([dict(type='touch', phase=1, x=x, y=90, generation=generation) for x in (90,100,110)] +
+                               [dict(type='touch', phase=2, x=120, y=90, generation=generation)])
+            for x in (90,100,110):
+                assert wait_event('TOUCH 1') == f'TOUCH 1 {x} 90'
+            assert wait_event('TOUCH 2') == 'TOUCH 2 120 90'
+            # Only an actual down takes ownership. The previous source's late
+            # moves/up cannot affect the new owner's gesture.
+            touch(0); wait_event('TOUCH 0'); assert status()['inputOwner'] == 'browser'
+            command('l'); wait_event('TOUCH 3'); assert wait_event('TOUCH 0') == 'TOUCH 0 40 50'
+            assert status()['inputOwner'] == 'receiver'
+            touch(1,120,90); time.sleep(0.1)
+            assert not any(e.startswith('TOUCH 1') for e in list(events.queue))
+            touch(0); wait_event('TOUCH 3'); wait_event('TOUCH 0')
+            command('mu'); assert status()['inputOwner'] == 'browser'
+            assert not any(e.startswith(('TOUCH 1','TOUCH 2')) for e in list(events.queue))
+            touch(2); wait_event('TOUCH 2'); assert status()['inputOwner'] == 'none'
             command('s'); time.sleep(2.1)
             assert status()['frameAgeMs'] > 2000
             touch(0); wait_event('TOUCH 0'); touch(2); wait_event('TOUCH 2')
@@ -175,10 +206,14 @@ def main():
             assert not any(e.startswith('TOUCH 0') for e in list(events.queue))
             control.send(dict(type='touch', phase=0, x=320, y=180, generation=state['generation']))
             wait_event('TOUCH 0 320 180'); control.close(); sockets.remove(control); wait_event('TOUCH 3')
-            malformed = WS(port, '/control'); wait_event('TOUCH 3')
+            malformed = WS(port, '/control')
             malformed.send(dict(type='touch', phase=True, x=1, y=1, generation=state['generation']))
             assert malformed.sock.recv(1) == b''; malformed.close()
-            print('PASS: passwordless HTTP/WS, duplicate AVC config, origin/host, one controller, AVC time, touch, deadman, foreground reset, stale generation')
+            command('l'); wait_event('TOUCH 0'); assert status()['inputOwner'] == 'receiver'
+            command('b'); wait_event('TOUCH 3'); assert status()['inputOwner'] == 'none'
+            command('f'); command('l'); wait_event('TOUCH 0'); command('a'); wait_event('TOUCH 3')
+            assert status()['inputOwner'] == 'none'
+            print('PASS: passwordless HTTP/WS, duplicate AVC config, origin/host, one controller, AVC time, touch, batched drag, local/browser ownership, deadman, foreground reset, stale generation')
         finally:
             for ws in sockets:
                 ws.close()

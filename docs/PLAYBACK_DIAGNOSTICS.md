@@ -1,8 +1,10 @@
-# Showcase+ v1.2.0：播放恢复和诊断
+# Showcase+ v1.2.1：播放恢复和诊断
+
+v1.2.1 的复查与新增触摸／诊断改动见 [播放与触摸复查](PLAYBACK_REVIEW.md)。
 
 网页右上角“菜单 → 诊断”打开浮层，“复制诊断”生成当前快照；HTTP 不支持 Clipboard API 时自动尝试兼容复制。复制失败可直接选取面板文字。诊断只在本机页面计算和显示，不上传。
 
-- `receivedFps`：网页每秒收到的视频帧数。
+- `receivedFps`：网页每秒收到的视频消息数；它和帧提交回调都不是逐帧图像内容变化校验。
 - `presentedFps`：画面提交回调或浏览器帧计数得到的帧率；不支持计数的旧浏览器显示 null，不能把时间轴推进伪装成出画面帧率。
 - `bufferedAheadMs`：当前播放点到缓冲尾部的时间差，不是整个链路的端到端延迟。
 - `historySeconds`、`queuedBytes`、`serverQueueBytes`：已保留的历史视频、网页待追加字节和服务端待发送字节。
