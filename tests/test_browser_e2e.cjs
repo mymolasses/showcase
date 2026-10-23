@@ -44,6 +44,7 @@ const domain = 'carplay.showcase.test';
       for (let i = 0; i < 60; i++) {
         context.fillStyle = '#13254b'; context.fillRect(0, 0, 1920, 1080);
         context.fillStyle = '#48cfae'; context.fillRect(i * 24, 300, 300, 480);
+        context.fillStyle = '#e43a32'; context.fillRect(20,20,60,60);
         const frame = new VideoFrame(canvas, {timestamp: Math.round(i * 1e6 / 30), duration: 33333});
         encoder.encode(frame, {keyFrame: i % 30 === 0}); frame.close();
       }
@@ -150,7 +151,10 @@ const domain = 'carplay.showcase.test';
       assert.equal(await page.locator('#poster').isVisible(),false);
       const color=await page.evaluate(()=>{const source=document.querySelector('#display canvas,#display img');const c=document.createElement('canvas');c.width=c.height=1;const ctx=c.getContext('2d');const height=source.naturalHeight||source.height;ctx.drawImage(source,10,height-10,1,1,0,0,1,1);return [...ctx.getImageData(0,0,1,1).data];});
       assert(color[2]>color[0] && color[2]>40 && color[3]===255,'native decoded pixels must match the fixture in '+mode+': '+color);
+      const corner=await page.evaluate(()=>{const source=document.querySelector('#display canvas,#display img');const c=document.createElement('canvas');c.width=c.height=1;const ctx=c.getContext('2d');const width=source.naturalWidth||source.width,height=source.naturalHeight||source.height;ctx.drawImage(source,width/64,height/36,1,1,0,0,1,1);return [...ctx.getImageData(0,0,1,1).data];});
+      assert(corner[0]>corner[2]+50,'native picture orientation must preserve the red top-left marker in '+mode+': '+corner);
       if(mode==='jpeg') assert.equal(await page.locator('#display canvas').evaluate(c=>c.width),1280,'native JPEG caps width');
+      if(mode==='jpeg') assert.equal(await page.locator('#display canvas').evaluate(c=>c.height),720,'native JPEG preserves the visible 16:9 crop');
     }
     // Actual service loss: retain the last image, back off, recover new sockets.
     helper.stdin.write('q'); await once(helper, 'exit');

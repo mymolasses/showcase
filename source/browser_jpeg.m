@@ -8,6 +8,7 @@
 #import <ImageIO/ImageIO.h>
 #include <pthread.h>
 #include <time.h>
+#include <math.h>
 
 static pthread_mutex_t jpegLock = PTHREAD_MUTEX_INITIALIZER;
 static dispatch_queue_t queue;
@@ -56,13 +57,17 @@ static void encode_picture(CVImageBufferRef image, CMTime pts, uint32_t stream) 
         CGContextRef original = CGBitmapContextCreate(CVPixelBufferGetBaseAddress(image), width, height, 8,
             CVPixelBufferGetBytesPerRow(image), rgb, kCGBitmapByteOrder32Little | kCGImageAlphaPremultipliedFirst);
         CGImageRef full = original ? CGBitmapContextCreateImage(original) : NULL;
-        size_t outWidth = MIN(width, 1280), outHeight = MAX((size_t)1, height * outWidth / MAX(width, (size_t)1));
+        CGSize visible = CMVideoFormatDescriptionGetPresentationDimensions(format,true,true);
+        size_t visibleWidth = visible.width > 0 ? MIN(width,(size_t)llround(visible.width)) : width;
+        size_t visibleHeight = visible.height > 0 ? MIN(height,(size_t)llround(visible.height)) : height;
+        CGImageRef cropped = full ? CGImageCreateWithImageInRect(full,CGRectMake(0,0,visibleWidth,visibleHeight)) : NULL;
+        size_t outWidth = MIN(visibleWidth, 1280), outHeight = MAX((size_t)1, visibleHeight * outWidth / MAX(visibleWidth, (size_t)1));
         CGContextRef scaled = full ? CGBitmapContextCreate(NULL, outWidth, outHeight, 8, outWidth * 4, rgb,
             kCGImageAlphaPremultipliedLast) : NULL;
         CGImageRef thumbnail = NULL;
         if (scaled) {
             CGContextSetInterpolationQuality(scaled, kCGInterpolationMedium);
-            CGContextDrawImage(scaled, CGRectMake(0, 0, outWidth, outHeight), full);
+            CGContextDrawImage(scaled, CGRectMake(0, 0, outWidth, outHeight), cropped ?: full);
             thumbnail = CGBitmapContextCreateImage(scaled);
         }
         NSMutableData *data = [NSMutableData data];
@@ -76,6 +81,7 @@ static void encode_picture(CVImageBufferRef image, CMTime pts, uint32_t stream) 
         }
         if (thumbnail) CGImageRelease(thumbnail);
         if (scaled) CGContextRelease(scaled);
+        if (cropped) CGImageRelease(cropped);
         if (full) CGImageRelease(full);
         if (original) CGContextRelease(original);
         CGColorSpaceRelease(rgb); CVPixelBufferUnlockBaseAddress(image, kCVPixelBufferLock_ReadOnly);

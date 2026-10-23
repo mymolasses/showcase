@@ -79,7 +79,9 @@
           if (message.type === 'consumed') { inFlight = 0; pumpSoftware(); }
           if (message.type === 'error') onError('Software: '+message.message);
           if (message.type === 'picture') {
-            if (element.width !== message.width || element.height !== message.height) { element.width=message.width;element.height=message.height; }
+            // Legacy AVC decoders may expose macroblock padding (1088 for
+            // a 1080-line source). Preserve the advertised touch geometry.
+            if (element.width !== config.width || element.height !== config.height) { element.width=config.width;element.height=config.height; }
             element.getContext('2d').putImageData(new ImageData(message.pixels,message.width,message.height),0,0);
             outputCount++; lastOutputAt=performance.now(); onFrame();
           }
