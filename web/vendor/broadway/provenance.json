@@ -1,0 +1,14 @@
+{
+  "Decoder.js": {
+    "url": "https://raw.githubusercontent.com/tesla-android/frontend/34763a62819a1dedad9d3eb62f1e175f2659091f/js/display/renderers/h264-broadway/Decoder.js",
+    "sha256": "c18ef5ef3ee9361e240386fce570657c3b831370ab406a87a131861aa184e82e"
+  },
+  "YUVCanvas.js": {
+    "url": "https://raw.githubusercontent.com/tesla-android/frontend/34763a62819a1dedad9d3eb62f1e175f2659091f/js/display/renderers/h264-broadway/YUVCanvas.js",
+    "sha256": "c513bbbc938b0d56205ebe79dc836023182779cd31a658d1baf47d654b39bed6"
+  },
+  "avc.wasm": {
+    "url": "https://raw.githubusercontent.com/tesla-android/frontend/34763a62819a1dedad9d3eb62f1e175f2659091f/js/display/renderers/h264-broadway/avc.wasm",
+    "sha256": "f05e959033da0e40f3b91943b3cf5a5119316728bfdc9dab90e712a2aded6420"
+  }
+}

@@ -18,6 +18,14 @@ on:
           - macos-15-intel
           - macos-15
           - macos-latest
+      publish:
+        description: Publish a tagged Release (false validates the supplied ref only)
+        type: boolean
+        default: true
+      compile_only:
+        description: Check native compilation without publishing (manual ref validation)
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -29,7 +37,7 @@ concurrency:
 jobs:
   release:
     runs-on: ${{ inputs.runner || 'macos-15-intel' }}
-    timeout-minutes: 35
+    timeout-minutes: 70
     env:
       GH_TOKEN: ${{ github.token }}
       RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
@@ -45,8 +53,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$RELEASE_TAG" = "v$(cat VERSION)"
-          test "$(git rev-list -n 1 "$RELEASE_TAG")" = "$(git rev-parse HEAD)"
+          if [ '${{ github.event_name }}' = push ] || [ '${{ inputs.publish }}' = true ]; then
+            test "$RELEASE_TAG" = "v$(cat VERSION)"
+            test "$(git rev-list -n 1 "$RELEASE_TAG")" = "$(git rev-parse HEAD)"
+          fi
           python3 -c 'import tools.build_browser_rootless as b; print(b.DISPLAY_NAME, b.VERSION, b.BUILD_NUMBER)'
       - name: Prepare isolated browser tests
         shell: bash
@@ -58,6 +68,7 @@ jobs:
             "$RUNNER_TEMP/browser-tests/node_modules/.bin/playwright" install chrome
           fi
       - name: Validate native services and browser playback
+        if: ${{ !inputs.compile_only }}
         shell: bash
         run: |
           set -euo pipefail
@@ -89,6 +100,7 @@ jobs:
           cd build/browser-rootless
           shasum -a 256 -c SHA256SUMS
       - name: Publish verified release assets
+        if: ${{ github.event_name == 'push' || (inputs.publish && !inputs.compile_only) }}
         shell: bash
         run: |
           set -euo pipefail

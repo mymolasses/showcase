@@ -80,7 +80,7 @@ static NSDictionary *report(SCNetState *s, bool port80, uint16_t port, uint64_t 
         @"routeCheckDurationMs": @(networkCheckDuration * 1000)};
 }
 static void reply(SCProbeClient *c, int code, NSString *mime, NSData *body) {
-    NSString *header = [NSString stringWithFormat:@"HTTP/1.1 %d %@\r\nContent-Type: %@\r\nContent-Length: %lu\r\nCache-Control: no-store\r\nConnection: close\r\nX-Content-Type-Options: nosniff\r\nContent-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; media-src 'self' blob:; object-src 'none'; frame-ancestors 'none'\r\n\r\n",
+    NSString *header = [NSString stringWithFormat:@"HTTP/1.1 %d %@\r\nContent-Type: %@\r\nContent-Length: %lu\r\nCache-Control: no-store\r\nConnection: close\r\nX-Content-Type-Options: nosniff\r\nContent-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; img-src 'self' blob:; style-src 'self' 'unsafe-inline'; connect-src 'self'; media-src 'self' blob:; object-src 'none'; frame-ancestors 'none'\r\n\r\n",
         code, code == 200 ? @"OK" : @"Rejected", mime, (unsigned long)body.length];
     NSMutableData *output = [[header dataUsingEncoding:NSUTF8StringEncoding] mutableCopy]; [output appendData:body]; c.output = output; c.sent = 0; c.mode = 1;
 }
@@ -110,7 +110,7 @@ static void append_down(SCProbeClient *c, const void *bytes, size_t count) {
     [c.output appendBytes:bytes length:count];
 }
 static bool start_relay(SCProbeClient *c, NSString *path, NSDictionary *headers) {
-    bool websocket = [path isEqual:@"/media"] || [path isEqual:@"/control"];
+    bool websocket = [path isEqual:@"/media"] || [path isEqual:@"/jpeg"] || [path isEqual:@"/rtc"] || [path isEqual:@"/control"];
     NSString *host = [NSString stringWithFormat:@"127.0.0.1:%u", backendPort];
     NSMutableString *request = [NSMutableString stringWithFormat:@"GET %@ HTTP/1.1\r\nHost: %@\r\nConnection: %@\r\n", path, host, websocket ? @"Upgrade" : @"close"];
     if (websocket) {
@@ -331,11 +331,12 @@ int main(int argc, char **argv) { @autoreleasepool {
                     NSString *path=request.count>1 ? request[1] : @"";
                     if(!valid) reply(c,400,@"text/plain",[@"Invalid local HTTP request" dataUsingEncoding:NSUTF8StringEncoding]);
                     else if(!origin_valid(headers[@"origin"],headers[@"host"],c)) reply(c,403,@"text/plain",[@"Same origin required" dataUsingEncoding:NSUTF8StringEncoding]);
-                    else if([path isEqual:@"/"] || [path isEqual:@"/player.js"] || [path isEqual:@"/probe"] || [path isEqual:@"/probe.js"]) {
-                        bool script=[path hasSuffix:@".js"];
-                        const char *asset=[path isEqual:@"/"] ? browser_index_html : [path isEqual:@"/player.js"] ? browser_player_js : [path isEqual:@"/probe.js"] ? browser_probe_js : browser_probe_html;
-                        if(!script) { requests++; fprintf(stderr,"[TESLA-NET] HTTP page received port=%u TLS=%d\n",c.port,c.tls!=nil); }
-                        reply(c,200,script ? @"application/javascript" : @"text/html; charset=utf-8",[NSData dataWithBytes:asset length:strlen(asset)]);
+                    else if([path isEqual:@"/"] || [path isEqual:@"/probe"] || [path hasSuffix:@".js"] || [path hasSuffix:@".wasm"]) {
+                        const unsigned char *asset=NULL; size_t length=0; const char *mime=NULL;
+                        if(showcase_browser_asset(path.UTF8String,&asset,&length,&mime)) {
+                            if([path isEqual:@"/"] || [path isEqual:@"/probe"]) requests++;
+                            reply(c,200,@(mime),[NSData dataWithBytes:asset length:length]);
+                        } else reply(c,404,@"text/plain",[@"Not found" dataUsingEncoding:NSUTF8StringEncoding]);
                     } else if([path isEqual:@"/probe.json"]) {
                         requests++; NSMutableDictionary *data=[report(&state,port80,port,requests,tls) mutableCopy];
                         SCNetRoute route={0}; int error=EAGAIN; char name[IFNAMSIZ]="";
@@ -344,8 +345,8 @@ int main(int argc, char **argv) { @autoreleasepool {
                         data[@"returnRoutePending"]=@(!ready);
                         data[@"returnInterface"]=[NSString stringWithUTF8String:name]; data[@"returnViaHotspot"]=@(ready && !error && state.primary.index && route.index==state.primary.index);
                         reply(c,200,@"application/json",[NSJSONSerialization dataWithJSONObject:data options:0 error:NULL]);
-                    } else if([path isEqual:@"/status"] || [path isEqual:@"/media"] || [path isEqual:@"/control"]) {
-                        bool ws=![path isEqual:@"/status"];
+                    } else if([path isEqual:@"/status"] || [path isEqual:@"/media"] || [path isEqual:@"/jpeg"] || [path isEqual:@"/mjpeg"] || [path isEqual:@"/rtc"] || [path isEqual:@"/control"]) {
+                        bool ws=![path isEqual:@"/status"] && ![path isEqual:@"/mjpeg"];
                         if(ws && (!headers[@"origin"] || ![[headers[@"upgrade"] lowercaseString] isEqual:@"websocket"]))
                             reply(c,403,@"text/plain",[@"Same-origin WebSocket required" dataUsingEncoding:NSUTF8StringEncoding]);
                         else if(!start_relay(c,path,headers)) reply(c,503,@"text/plain",[@"Start a browser-enabled CarPlay session in Showcase" dataUsingEncoding:NSUTF8StringEncoding]);

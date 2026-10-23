@@ -20,6 +20,10 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+try:
+    from browser_native import flags as browser_native_flags, prepare as prepare_native
+except ModuleNotFoundError:
+    from tools.browser_native import flags as browser_native_flags, prepare as prepare_native
 
 ROOT = Path(__file__).resolve().parents[1]
 UPSTREAM_SHA256 = 'f91ab0bf7ddf94d9eb1eacc56db37e8943ea8f1dce60c4976f793d679707a1d6'
@@ -134,6 +138,7 @@ def main():
     compiler = run(['xcrun', '--sdk', 'iphoneos', 'clang', '--version'], True).splitlines()[0]
     revision = run(['git', 'rev-parse', 'HEAD'], True).strip()
     source_paths = ['source/Showcase.m', 'source/carplay_services.m', 'source/browser_bridge.m',
+                    'source/browser_jpeg.m','source/browser_jpeg.h','source/browser_rtc.m','source/browser_rtc.h',
                     'source/browser_bridge.h', 'source/browser_settings.h', 'source/browser_assets.h',
                     'source/browser_network.c', 'source/browser_network.h', 'source/browser_probe.m',
                     'source/browser_web_tls.m', 'source/browser_web_tls.h',
@@ -147,6 +152,9 @@ def main():
                   'compiler': compiler, 'sdk': Path(sdk).name,
                   'upstream_runtime': {'url': UPSTREAM_URL, 'sha256': UPSTREAM_SHA256},
                   'compiled_source_sha256': {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in source_paths}}
+    native = prepare_native('ios')
+    provenance['native_dependency_pins'] = native['pins']
+    provenance['browser_vendor_files'] = json.loads((ROOT/'web/vendor/broadway/provenance.json').read_text())
     unchanged = [APP + 'CarDisplaySim', 'var/jb/usr/bin/BTdaemon', 'var/jb/usr/lib/libBTstack.dylib']
     provenance['unchanged_runtime_sha256'] = {name: hashlib.sha256(payload[name][1]).hexdigest() for name in unchanged}
     with tempfile.TemporaryDirectory(prefix='showcase-rootless-build-') as directory:
@@ -161,10 +169,10 @@ def main():
                      'source/Showcase.m', '-framework', 'UIKit', '-framework', 'AVFoundation',
                      '-framework', 'AudioToolbox', '-framework', 'CoreMedia', '-framework', 'Foundation',
                      '-framework', 'Security', '-Wl,-undefined,dynamic_lookup', '-o', str(ui)])
-        run(flags + ['source/carplay_services.m', 'source/browser_bridge.m', 'source/carplay_pair.c',
+        run(flags + ['source/carplay_services.m', 'source/browser_bridge.m', 'source/browser_jpeg.m','source/browser_rtc.m','source/carplay_pair.c',
                      'source/vendor/monocypher/monocypher.c', 'source/vendor/monocypher/monocypher-ed25519.c',
                      'source/vendor/libtommath/tommath.c', '-framework', 'Foundation', '-framework', 'Security',
-                     '-Wl,-undefined,dynamic_lookup', '-o', str(service)])
+                     *browser_native_flags('ios'), '-o', str(service)])
         run(flags + ['source/browser_probe.m', 'source/browser_network.c', 'source/browser_web_tls.m',
                      '-framework', 'Foundation', '-framework', 'Security', '-o', str(probe)])
         for binary, ent in [(ui, 'ent_app.xml'), (service, 'ent_svc.xml'), (probe, 'ent_svc.xml')]:
@@ -205,7 +213,7 @@ def main():
             continue
         lines.append(key + ': ' + updates[key] if key in updates else line)
     lines += ['Description: Unofficial foreground CarPlay browser prototype for rootless iOS 16.2+.',
-              ' Adds local H.264 browser output and single-touch input without Android.',
+              ' Adds JPEG, WebCodecs, software and WebRTC browser output with touch.',
               ' Built for testing with iPhone 14 Pro Max / Dopamine rootless.',
               ' Hardware compatibility remains unverified. Based on Showcase Beta 5-2.']
     replace(control, 'control', ('\n'.join(lines).rstrip() + '\n').encode(), 0o644)
