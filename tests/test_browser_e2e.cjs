@@ -19,7 +19,8 @@ const domain = 'carplay.showcase.test';
 const profile = process.env.SHOWCASE_TEST_AVC_PROFILE || 'baseline';
 const codecs = {baseline:'avc1.42002a',main:'avc1.4d002a',high:'avc1.64002a'};
 assert(codecs[profile], 'Unknown AVC test profile');
-const width = profile==='baseline' ? 1920 : 1600, height = profile==='baseline' ? 1080 : 900;
+const fullHD = profile==='baseline' || process.env.SHOWCASE_TEST_VT_UNAVAILABLE==='1';
+const width = fullHD ? 1920 : 1600, height = fullHD ? 1080 : 900;
 process.env.SHOWCASE_RTC_DEBUG='1'; // Synthetic local peers only; no phone data.
 
 (async () => {
