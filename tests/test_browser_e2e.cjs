@@ -97,6 +97,9 @@ process.env.SHOWCASE_RTC_DEBUG='1'; // Synthetic local peers only; no phone data
     assert.equal(await page.locator('input').count(), 0);
     await page.waitForFunction(()=>window.showcaseDiagnostics?.().displayed && showcaseDiagnostics().drawnFrames>2,null,{timeout:20000});
     if(process.env.SHOWCASE_TEST_VT_UNAVAILABLE==='1') {
+      // Frames can arrive before the independent 1.5s status poll refreshes
+      // the pre-subscription snapshot. Observe the real backend transition.
+      await page.waitForFunction(()=>showcaseDiagnostics().receiver.jpegDecoderBackend==='ffmpeg',null,{timeout:10000});
       assert.equal(await page.evaluate(()=>showcaseDiagnostics().receiver.jpegDecoderBackend),'ffmpeg');
       assert((await page.evaluate(()=>showcaseDiagnostics().receiver.jpegFallbackReason)).includes('-12780'));
     }
