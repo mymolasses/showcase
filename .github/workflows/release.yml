@@ -88,6 +88,7 @@ jobs:
           python3 tests/test_control_connect.py
           python3 tests/test_bluetooth_recovery.py
           python3 tests/test_bluetooth_startup.py
+          python3 tests/test_iap2_stream.py
           python3 tests/test_launch_recovery.py
           python3 tests/test_localization.py
           python3 tests/test_browser_packaging.py

@@ -25,6 +25,7 @@
 #include <dispatch/dispatch.h>
 #include <notify.h>
 #include "baa_broker.h"
+#include "iap2_stream.h"
 
 /* Connection progress for the Showcase setup screen. The app reads the
  * accumulated bit set from the notify state, so a late registration still
@@ -147,6 +148,7 @@ static uint16_t rfcomm_mtu = 1007;
 static volatile sig_atomic_t bluetooth_handoff_requested = 0;
 static int iap2_detected = 0, link_established = 0, detect_count = 0;
 static uint8_t my_initial_psn = 0, my_next_psn = 0, peer_psn = 0;
+static SCIAP2Stream iap2_stream;
 
 /* ── Local BT address ── */
 static uint8_t local_bd_addr[6] = {0};
@@ -194,6 +196,7 @@ static char wifi_ipv6[INET6_ADDRSTRLEN] = "";
 static int packet_debug_count = 0;
 
 static void reset_wireless_handoff_state(void) {
+    iap2_stream.used = 0;
     handoff_generation++;
     wifi_config_sent = 0;
     start_session_sent = 0;
@@ -1235,29 +1238,10 @@ static void handle_ctrl_msg(uint16_t msg_id, uint8_t *params, int plen) {
     }
 }
 
-/* ═══════════════════════════════════════════════
- *  BTstack packet handler
- * ═══════════════════════════════════════════════ */
-static void handler(uint8_t type, uint16_t ch, uint8_t *pkt, uint16_t sz) {
-    if(packet_debug_count < 24) {
-        printf("[BT] packet type=%u ch=0x%04x len=%u", type, ch, sz);
-        int n = sz < 12 ? sz : 12;
-        for(int i=0;i<n;i++) printf(" %02X", pkt[i]);
-        printf("\n");
-        packet_debug_count++;
-    }
-
-    if(type==4 && sz>=1 && pkt[0]==0x62) {
-        printf("[BT] FATAL: BTSTACK_EVENT_POWERON_FAILED\n");
-        fflush(stdout);
-        fflush(stderr);
-        unlink(BT_READY_PATH);
-        exit(62);
-    }
-
-    if(type==4&&pkt[0]==0x6c) return;
-
-    if(type==7) {
+/* Called once per complete, checksum-validated iAP2 packet, regardless of
+ * how RFCOMM groups the bytes. Never log authentication or Wi-Fi payloads. */
+static void receive_iap2_packet(uint8_t *pkt, size_t sz, void *context) {
+    (void)context;
         if(sz>=6&&memcmp(pkt,iap2_detect,6)==0&&!iap2_detected) {
             printf("[CP] *** DETECT ECHO ***\n");
             iap2_detected=1; alarm(0);
@@ -1280,28 +1264,69 @@ static void handler(uint8_t type, uint16_t ch, uint8_t *pkt, uint16_t sz) {
                 peer_psn=seq;
                 printf("[SYN-ACK] seq=0x%02X ack=0x%02X\n", seq, ack);
                 if(sz>9) {
-                    printf("[SYN-ACK] payload(%d):", sz-9);
-                    for(int i=9;i<sz&&i<40;i++) printf(" %02X",pkt[i]);
+                    printf("[SYN-ACK] payload(%zu):", sz-9);
+                    for(size_t i=9;i<sz&&i<40;i++) printf(" %02X",pkt[i]);
                     printf("\n");
                 }
                 if(ack==my_initial_psn){send_ack();link_established=1;printf("[CP] *** LINK UP ***\n");}
                 return;
             }
-            peer_psn=seq;
+            if(!link_established) return;
             if((ctrl&0x40)&&session!=0&&sz>10) {
+                /* ACK-only packets do not consume a sequence number. A peer
+                 * retry must be acknowledged without repeating side effects. */
+                if (seq != (uint8_t)(peer_psn + 1)) {
+                    printf("[IAP2] duplicate/out-of-order seq=0x%02X expected=0x%02X\n",
+                           seq, (uint8_t)(peer_psn + 1));
+                    send_ack();
+                    return;
+                }
+                peer_psn=seq;
                 send_ack();
                 uint8_t *m=&pkt[9]; int pl=sz-10;
-                if(pl>=6&&m[0]==0x40&&m[1]==0x40) {
-                    uint16_t mlen=(m[2]<<8)|m[3], mid=(m[4]<<8)|m[5];
-                    handle_ctrl_msg(mid,&m[6],mlen-6);
+                /* Also bound each control message to this packet's payload. */
+                for (int offset=0; offset+6<=pl;) {
+                    uint8_t *message=m+offset;
+                    uint16_t mlen=(message[2]<<8)|message[3];
+                    if(message[0]!=0x40 || message[1]!=0x40 || mlen<6 || mlen>pl-offset) {
+                        printf("[IAP2] invalid control message length\n");
+                        break;
+                    }
+                    uint16_t mid=(message[4]<<8)|message[5];
+                    handle_ctrl_msg(mid,&message[6],mlen-6);
+                    offset += mlen;
                 }
                 return;
             }
             if(ctrl==0x40) return;
         }
+}
+
+/* ═══════════════════════════════════════════════
+ *  BTstack packet handler
+ * ═══════════════════════════════════════════════ */
+static void handler(uint8_t type, uint16_t ch, uint8_t *pkt, uint16_t sz) {
+    if(packet_debug_count < 24) {
+        printf("[BT] packet type=%u ch=0x%04x len=%u", type, ch, sz);
+        int n = sz < 12 ? sz : 12;
+        for(int i=0;i<n;i++) printf(" %02X", pkt[i]);
+        printf("\n");
+        packet_debug_count++;
+    }
+    if(type==4 && sz>=1 && pkt[0]==0x62) {
+        printf("[BT] FATAL: BTSTACK_EVENT_POWERON_FAILED\n");
+        fflush(stdout);
+        fflush(stderr);
+        unlink(BT_READY_PATH);
+        exit(62);
+    }
+    if(type==4 && sz>=1 && pkt[0]==0x6c) return;
+    if(type==7) {
+        if (active_cid && ch==active_cid)
+            sc_iap2_feed(&iap2_stream,pkt,sz,receive_iap2_packet,NULL);
         return;
     }
-
+    if (!sz) return;
     if(type==5||type!=4) return;
 
     /* Capture BD_ADDR from HCI Read BD_ADDR command complete */

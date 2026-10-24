@@ -177,7 +177,8 @@ def main():
     sdk = run(['xcrun', '--sdk', 'iphoneos', '--show-sdk-path'], True).strip()
     compiler = run(['xcrun', '--sdk', 'iphoneos', 'clang', '--version'], True).splitlines()[0]
     revision = run(['git', 'rev-parse', 'HEAD'], True).strip()
-    source_paths = ['source/Showcase.m', 'source/carplay_services.m', 'source/browser_bridge.m',
+    source_paths = ['source/Showcase.m', 'source/carplay_bt.m', 'source/iap2_stream.h',
+                    'source/carplay_services.m', 'source/browser_bridge.m',
                     'source/browser_jpeg.m','source/browser_jpeg.h','source/browser_rtc.m','source/browser_rtc.h',
                     'source/browser_bridge.h', 'source/browser_settings.h', 'source/display_geometry.h', 'source/browser_assets.h',
                     'source/browser_network.c', 'source/browser_network.h', 'source/browser_probe.m',
@@ -206,7 +207,7 @@ def main():
     (args.output/'ffmpeg-build.json').write_text(json.dumps({'pins':native['pins']['ffmpeg'],
         **provenance['ffmpeg_source']},indent=2)+'\n')
     provenance['browser_vendor_files'] = json.loads((ROOT/'web/vendor/broadway/provenance.json').read_text())
-    unchanged = [APP + 'CarDisplaySim', 'var/jb/usr/bin/BTdaemon', 'var/jb/usr/lib/libBTstack.dylib']
+    unchanged = ['var/jb/usr/bin/BTdaemon', 'var/jb/usr/lib/libBTstack.dylib']
     provenance['unchanged_runtime_sha256'] = {name: hashlib.sha256(payload[name][1]).hexdigest() for name in unchanged}
     with tempfile.TemporaryDirectory(prefix='showcase-rootless-build-') as directory:
         work = Path(directory)
@@ -216,6 +217,9 @@ def main():
         ui = work / 'Showcase'
         service = work / 'CarPlay Simulator'
         probe = work / 'ShowcaseNet'
+        bluetooth = work / 'CarDisplaySim'
+        btstack_library = work / 'libBTstack.dylib'
+        btstack_library.write_bytes(payload['var/jb/usr/lib/libBTstack.dylib'][1])
         run(flags + ['-DAPP_NAME="' + DISPLAY_NAME + '"', '-DAPP_VERSION="' + VERSION + '"', '-DPACKAGE_VERSION="' + VERSION + '"',
                      'source/Showcase.m', '-framework', 'UIKit', '-framework', 'AVFoundation',
                      '-framework', 'AudioToolbox', '-framework', 'CoreMedia', '-framework', 'Foundation',
@@ -226,7 +230,10 @@ def main():
                      *browser_native_flags('ios'), '-o', str(service)])
         run(flags + ['source/browser_probe.m', 'source/browser_network.c', 'source/browser_web_tls.m',
                      '-framework', 'Foundation', '-framework', 'Security', '-o', str(probe)])
-        for binary, ent in [(ui, 'ent_app.xml'), (service, 'ent_svc.xml'), (probe, 'ent_svc.xml')]:
+        run(flags + ['source/carplay_bt.m', str(btstack_library), '-framework', 'Foundation',
+                     '-framework', 'Security', '-Wl,-undefined,dynamic_lookup', '-o', str(bluetooth)])
+        for binary, ent in [(ui, 'ent_app.xml'), (service, 'ent_svc.xml'), (probe, 'ent_svc.xml'),
+                            (bluetooth, 'ent_bt.xml')]:
             run(['codesign', '--force', '--sign', '-', '--timestamp=none', '--generate-entitlement-der',
                  '--entitlements', str(ROOT / 'source' / ent), str(binary)])
             run(['codesign', '--verify', '--strict', str(binary)])
@@ -238,7 +245,11 @@ def main():
             load_commands = run(['otool', '-l', str(binary)], True)
             if 'minos 16.2' not in load_commands:
                 raise SystemExit('Missing iOS 16.2 deployment target')
+        bluetooth_dependencies = run(['otool', '-L', str(bluetooth)], True)
+        if '/var/jb/usr/lib/libBTstack.dylib' not in bluetooth_dependencies:
+            raise SystemExit('Bluetooth helper must link the installed rootless BTstack library')
         replace(payload, APP + 'Showcase', ui.read_bytes(), 0o4755)
+        replace(payload, APP + 'CarDisplaySim', bluetooth.read_bytes(), 0o4755)
         replace(payload, APP + 'CarPlay Simulator', service.read_bytes(), 0o4755)
         replace(payload, APP + 'ShowcaseNet', probe.read_bytes(), 0o4755)
     info = plistlib.loads(payload[APP + 'Info.plist'][1])

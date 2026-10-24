@@ -91,7 +91,7 @@ SDK=$(find_sdk) || fail "The iPhoneOS SDK was not found."
 
 for REQUIRED in \
     Showcase.m carplay_bt.m carplay_services.m carplay_pair.c carplay_pair.h \
-    baa_broker.h Info.plist ent_app.xml ent_bt.xml ent_svc.xml \
+    baa_broker.h iap2_stream.h Info.plist ent_app.xml ent_bt.xml ent_svc.xml \
     ent_btdaemon.xml libBTstack.dylib ch.ringwald.BTstack.plist \
     control postinst prerm postrm
 do

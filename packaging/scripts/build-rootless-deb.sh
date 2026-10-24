@@ -148,6 +148,7 @@ mkdir -p \
 
 cp "$REPO_ROOT/source/Showcase.m" \
    "$REPO_ROOT/source/carplay_bt.m" \
+   "$REPO_ROOT/source/iap2_stream.h" \
    "$REPO_ROOT/source/carplay_services.m" \
    "$REPO_ROOT/source/carplay_pair.c" \
    "$REPO_ROOT/source/carplay_pair.h" \
