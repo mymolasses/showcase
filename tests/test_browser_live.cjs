@@ -12,7 +12,7 @@ const wire=(data,opcode=2)=>{
 (async()=>{
   let browser,timer,description,frames,jpegs,sequence=0,flowing=true;
   const media=new Set(),controls=new Set(),images=new Set(),sockets=new Set(),touches=[],errors=[];
-  let connections=0;
+  let connections=0,sourceProfile=66,jpegError=false;
   const until=async(predicate,label)=>{
     const deadline=Date.now()+5000;
     while(!predicate()) {
@@ -22,7 +22,8 @@ const wire=(data,opcode=2)=>{
   };
   const config=()=>{const head=Buffer.alloc(9);head[0]=1;head.writeUInt32BE(7,1);head.writeUInt16BE(640,5);head.writeUInt16BE(360,7);return Buffer.concat([head,Buffer.from(description)]);};
   const server=http.createServer((req,res)=>{
-    if(req.url==='/status'){res.setHeader('Content-Type','application/json');res.end(JSON.stringify({active:true,configured:true,generation:7,width:640,height:360,viewers:media.size+images.size,controllers:controls.size,version:'test',build:'fixture',frameAgeMs:33,receivedFrames:sequence,mediaQueueBytes:0}));return;}
+    if(req.url==='/status'){res.setHeader('Content-Type','application/json');res.end(JSON.stringify({active:true,configured:true,generation:7,width:640,height:360,viewers:media.size+images.size,controllers:controls.size,version:'test',build:'fixture',frameAgeMs:33,receivedFrames:sequence,mediaQueueBytes:0,sourceAVCProfile:sourceProfile,
+      ...(jpegError ? {jpegLastError:'JPEG decoder output: -12780',jpegRecoveryExhausted:1,jpegDecoderBackend:'ffmpeg'} : {})}));return;}
     if(req.url==='/mjpeg') {res.writeHead(200,{'Content-Type':'multipart/x-mixed-replace; boundary=showcase','Cache-Control':'no-store'});images.add(res);res.on('close',()=>images.delete(res));return;}
     const filename=req.url==='/'?'index.html':req.url.slice(1);
     if(filename.includes('..') || !fs.existsSync(path.join(root,'web',filename))){res.writeHead(404);res.end();return;}
@@ -76,7 +77,7 @@ const wire=(data,opcode=2)=>{
       if(!flowing)return;const n=sequence++,frame=frames[n%frames.length],image=Buffer.from(jpegs[n%jpegs.length]);
       for(const client of media) {
         if(client.path==='/media'){const head=Buffer.alloc(14);head[0]=2;head.writeUInt32BE(7,1);head[5]=+frame.key;head.writeBigUInt64BE(BigInt(Math.round(n*1e6/30)),6);client.socket.write(wire(Buffer.concat([head,Buffer.from(frame.bytes)])));}
-        if(client.path==='/jpeg'){const head=Buffer.alloc(21);head[0]=4;head.writeUInt32BE(7,1);head.writeBigUInt64BE(BigInt(n+1),5);head.writeBigUInt64BE(BigInt(Math.round(n*1e6/30)),13);client.socket.write(wire(Buffer.concat([head,image])));}
+        if(client.path==='/jpeg' && !jpegError){const head=Buffer.alloc(21);head[0]=4;head.writeUInt32BE(7,1);head.writeBigUInt64BE(BigInt(n+1),5);head.writeBigUInt64BE(BigInt(Math.round(n*1e6/30)),13);client.socket.write(wire(Buffer.concat([head,image])));}
       }
       for(const res of images)res.write(Buffer.concat([Buffer.from(`--showcase\r\nContent-Type: image/jpeg\r\nContent-Length: ${image.length}\r\n\r\n`),image,Buffer.from('\r\n')]));
     },33);
@@ -113,7 +114,13 @@ const wire=(data,opcode=2)=>{
     await page.click('#reconnect');await ready('jpeg');assert.equal(await page.locator('#poster').isVisible(),false);
     await page.click('#fit');assert.equal(await page.locator('#display canvas').evaluate(c=>getComputedStyle(c).objectFit),'contain');
     await page.selectOption('#renderer','webrtc');await page.waitForFunction(()=>showcaseDiagnostics().fallbackReason?.includes('fixture UDP unavailable') && showcaseDiagnostics().renderer==='jpeg');await ready('jpeg');
+    sourceProfile=100;
+    await page.waitForFunction(()=>document.querySelector('#renderer option[value="software"]').disabled && document.querySelector('#renderer option[value="software"]').textContent.includes('100'));
+    sourceProfile=66;
+    await page.waitForFunction(()=>!document.querySelector('#renderer option[value="software"]').disabled);
+    jpegError=true;await page.click('#reconnect');
+    await page.waitForFunction(()=>document.querySelector('#notice').textContent.includes('-12780') && !showcaseDiagnostics().displayed);
     assert.deepEqual(errors,[]);
-    console.log('PASS: real Chrome JPEG, MJPEG, WebCodecs, Broadway/WASM, selectable modes, touch/hold/cancel, static screen, reconnect, RTC failure fallback');
+    console.log('PASS: real Chrome modes, touch, static/reconnect, RTC fallback, AVC-aware options, visible phone decoder failure');
   } finally {clearInterval(timer);if(browser)await browser.close();for(const socket of sockets)socket.destroy();for(const res of images)res.destroy();await new Promise(resolve=>server.close(resolve));}
 })().catch(error=>{console.error(error);process.exitCode=1;});

@@ -7689,6 +7689,12 @@ static BOOL g_settings_hardware_loading = NO;
         [card addRow:[self valueRow:L(@"Wi-Fi Bus") value:hw[@"wifi"] ?: checking width:w] height:48];
         [card addRow:[self valueRow:L(@"CarPlay Video") value:hw ? [self videoDescription] : checking width:w] height:48];
     }];
+    [b card:^(SettingsCard *card) {
+        [card addRow:[self navRow:@"FFmpeg · LGPL-2.1-or-later" value:@"8.1.3" width:w action:^{
+            NSURL *url=[NSURL URLWithString:[@"https://github.com/mymolasses/showcase/releases/tag/v" stringByAppendingString:@APP_VERSION]];
+            [[UIApplication sharedApplication] openURL:url options:@{} completionHandler:nil];
+        }] height:48];
+    }];
 }
 
 /* ─── keyboard ─── */

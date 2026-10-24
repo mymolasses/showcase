@@ -1,6 +1,10 @@
-# Showcase+ 1.3.0：当前诊断
+# Showcase+ 1.3.4：当前诊断
 
 当前显示方式见 [BROWSER_MODES.md](BROWSER_MODES.md)。`renderer` 是实际后端，`fallbackReason` 说明回退原因；`capabilities` 记录浏览器安全上下文和解码 API，`receiver` 是独立的手机端统计。
+
+`receiver.sourceAVCProfile` 是源视频 Profile（66 Baseline、77 Main、100 High），不依赖是否启动 JPEG。JPEG / MJPEG 共用手机图片解码器：`jpegDecoderBackend` 表示 `videotoolbox` / `ffmpeg` / `inactive`；系统失败后应切到 CPU，`jpegFallbackReason` 保留触发切换的原因。`jpegLastFailure` 跨停用保留故障快照；切到 WebRTC 后它不是当前 WebRTC 错误。
+
+实机已确认 1.3.3 中持续 `-12780`、`jpegDecodedFrames=0`、`jpegEncodedFrames=0` 是系统解码输出失败，不能归因于网页 JPEG 解码。1.3.4 的预期是 CPU 后备的解码／编码／图片序列开始增加。旧系统错误记录仍可保留；应同时看当前后端、当前出图计数与最后出图时间。软件模式只支持 Baseline，High / Main 时会在选项中标记限制；HTTP 下没有 WebCodecs 是另一项能力条件。
 
 `presentedFps` 只统计有效解码后绘制到 Canvas 的输出，不能证明屏幕图像内容变化。MJPEG 无可靠观测时显示 null。`drawnFrames`、`lastDrawAgeMs`、`decodeQueue`、`waitingKey` 用于检查网页输出。WebRTC 的回调次数、原始帧时间与质量计数分别保留，不再把重复回调或播放时钟推进当作新画面。
 

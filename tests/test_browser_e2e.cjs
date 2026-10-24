@@ -27,7 +27,7 @@ process.env.SHOWCASE_RTC_DEBUG='1'; // Synthetic local peers only; no phone data
   let browser, server, helper, gateway;
   const certificate = useTLS ? fixtureTLS(work, domain) : null;
   try {
-    require('./native_browser_fixture.cjs')(path.join(work,'bridge'));
+    const nativeFlags=require('./native_browser_fixture.cjs')(path.join(work,'bridge'));
     execFileSync('clang', ['-fobjc-arc', '-DSC_PROBE_TEST=1', '-Wno-deprecated-declarations', '-framework', 'Foundation', '-framework', 'Security',
       path.join(root,'source/browser_probe.m'),path.join(root,'source/browser_network.c'),path.join(root,'source/browser_web_tls.m'),'-o',path.join(work,'gateway')]);
     server = http.createServer((_, res) => { res.end('<!doctype html><title>Synthetic AVC fixture</title>'); });
@@ -62,7 +62,7 @@ process.env.SHOWCASE_RTC_DEBUG='1'; // Synthetic local peers only; no phone data
     const fixture = path.join(work, 'avc.bin');
     fs.writeFileSync(fixture, Buffer.concat([record(encoded.description), ...encoded.frames.map(record)]));
     execFileSync('clang',['-fobjc-arc','-Wno-deprecated-declarations',path.join(root,'tests/browser_jpeg_recovery.m'),
-      ...['Foundation','VideoToolbox','CoreMedia','CoreVideo','CoreGraphics','ImageIO','CoreImage'].flatMap(name=>['-framework',name]),
+      '-framework','Foundation',...nativeFlags,
       '-o',path.join(work,'jpeg-recovery')],{stdio:'inherit'});
     execFileSync(path.join(work,'jpeg-recovery'),[fixture],{stdio:'inherit',timeout:25000});
     const port = server.address().port;
@@ -95,10 +95,15 @@ process.env.SHOWCASE_RTC_DEBUG='1'; // Synthetic local peers only; no phone data
     await page.goto(useTLS ? `https://${domain}:${tlsPort}/` : `http://127.0.0.1:${frontPort}/`);
     assert.equal(await page.locator('input').count(), 0);
     await page.waitForFunction(()=>window.showcaseDiagnostics?.().displayed && showcaseDiagnostics().drawnFrames>2,null,{timeout:20000});
+    if(process.env.SHOWCASE_TEST_VT_UNAVAILABLE==='1') {
+      assert.equal(await page.evaluate(()=>showcaseDiagnostics().receiver.jpegDecoderBackend),'ffmpeg');
+      assert((await page.evaluate(()=>showcaseDiagnostics().receiver.jpegFallbackReason)).includes('-12780'));
+    }
     await until(() => stderr.includes('[BROWSER] control connected'), 'browser control channel');
     // Status polling must enable input after actual frames arrive.
     await page.waitForTimeout(1200);
     await page.click('#menu');
+    if(profile!=='baseline') assert.equal(await page.locator('#renderer option[value="software"]').evaluate(o=>o.disabled),true);
     await page.click('#fit'); // verify original aspect-ratio mapping too
     const rect = await page.locator('#surface').boundingBox();
     const before = output.match(/TOUCH 0 /g)?.length || 0;
@@ -179,7 +184,7 @@ process.env.SHOWCASE_RTC_DEBUG='1'; // Synthetic local peers only; no phone data
     helper.stdin.write('f');
     await page.waitForFunction(()=>showcaseDiagnostics().displayed && showcaseDiagnostics().drawnFrames>2,null,{timeout:20000});
     assert.deepEqual(pageErrors, []);
-    console.log(`PASS (${useTLS?'HTTPS/WSS':'HTTP/WS'}, ${profile} ${width}x${height}): native pixels/crop/orientation, touch, static flush, reconnect, foreground without a new VideoConfig`);
+    console.log(`PASS (${useTLS?'HTTPS/WSS':'HTTP/WS'}, ${profile} ${width}x${height}, VT unavailable=${process.env.SHOWCASE_TEST_VT_UNAVAILABLE==='1'}): pixels/crop/orientation, touch, static flush, reconnect, foreground without a new VideoConfig`);
     console.log('Synthetic screenshot:', path.join(work, 'browser.png'));
   } finally {
     if (helper && helper.exitCode === null) { helper.stdin.write('q'); await once(helper, 'exit'); }

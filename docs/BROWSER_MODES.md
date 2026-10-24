@@ -1,4 +1,4 @@
-# Showcase+ 1.3.3 / 1010：浏览器显示方式
+# Showcase+ 1.3.4 / 1011：浏览器显示方式
 
 本版移除旧的 fMP4 / MSE 播放器，保留 CarPlay 接收、手机与网页触摸交接、免密码访问、热点兼容入口和手机蓝牙音频。H.264 编码本身仍用于部分新显示方式。
 
@@ -6,10 +6,10 @@
 
 | 选项 | 实际链路 | 条件与局限 |
 |---|---|---|
-| JPEG Canvas（默认） | 手机 VideoToolbox 解码、JPEG 编码，WS 传图片，网页解码绘制 | 不使用 video / MSE；最多 15 fps、宽度最多 1280，JPEG 质量 0.58；增加手机编码与热点流量 |
+| JPEG Canvas（默认） | 手机 VideoToolbox 解码，失败后切 FFmpeg CPU 解码；JPEG 通过 WS 传送，网页绘制 | 不使用 video / MSE；最多 15 fps、宽度最多 1280，质量 0.58；CPU 后备支持 High / Main，但增加耗电，帧率受接收机性能影响 |
 | MJPEG Image | 同一手机 JPEG 编码器，HTTP multipart 图片流 | 对照 OpenCarStream 的图片显示方式；浏览器无法准确提供实际绘制帧率，因此对应统计为 null |
 | WebCodecs Canvas | 转发 H.264，浏览器 VideoDecoder 输出到 Canvas | 需要浏览器提供 VideoDecoder，通常要求可信 HTTPS；localhost 的桌面测试不能代表车机 HTTP 支持 |
-| Software Canvas | 转发 H.264，Worker 中 Broadway/WASM 软件解码，绘制到 Canvas | 实验性，只支持兼容 Baseline 输入；不支持 CABAC、加权 P 帧等特性；性能不足或流不兼容会回退 JPEG |
+| Software Canvas | 转发 H.264，Worker 中 Broadway/WASM 软件解码，绘制到 Canvas | 实验性，只支持兼容 Baseline 输入；Main / High 源会明确禁用该选项，保存的旧选择会回退 JPEG；与手机端 FFmpeg CPU 后备是不同实现 |
 | WebRTC Canvas | libdatachannel 发送 H.264 RTP，浏览器接收后由离屏 video 解码并绘制 | 实验性，仅局域网 host ICE，无外部 STUN/TURN；需要 UDP / DTLS 和浏览器支持；仍依赖 video 解码，不能承诺规避车机视频策略 |
 
 不支持的浏览器 API 在选项中说明原因。新后端首次出帧超时、解码失败或持续收帧却没有有效输出时，明确记录原因并回退 JPEG；不会悄悄换回已删除的 MSE。JPEG 连续失败有恢复预算，避免无限重连。静态画面没有新来流时保留已有图片。
@@ -28,6 +28,6 @@
 
 ## 安装与验证边界
 
-停止 CarPlay，关闭网络探测，退出 Showcase，保持 Dopamine 越狱激活，用 Filza 覆盖安装新版 rootless deb。确认 **Showcase+ 1.3.3 / 1010**，重新开启 Browser Output、网络探测和 CarPlay。接收机保持前台，关闭其他观看页面，刷新原来的网页入口。
+停止 CarPlay，关闭网络探测，退出 Showcase，保持 Dopamine 越狱激活，用 Filza 覆盖安装新版 rootless deb。确认 **Showcase+ 1.3.4 / 1011**，重新开启 Browser Output、网络探测和 CarPlay。接收机保持前台，关闭其他观看页面，刷新原来的网页入口。
 
 自动测试覆盖协议、输入、重复回调、资源回收、真实 Chrome 多后端、原生 JPEG / WebRTC、HTTP / TLS 网关以及 iOS arm64 编译、签名与包来源验证。软件模拟和桌面测试不等于该型号车机已验证；本版不读取档位、不修改车辆系统，也不保证 D 档画面可用。此前已确认 P 档恢复、D 档冻结的观察记录保留在 PLAYBACK_REVIEW 和历史诊断中。请在停车后检查和导出数据。

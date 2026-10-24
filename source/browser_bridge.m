@@ -221,6 +221,7 @@ static void handle_http(SCBrowserClient *c) {
             @"width": @(videoWidth), @"height": @(videoHeight), @"generation": @(generation),
             @"version": @SHOWCASE_RELEASE_VERSION, @"build": @SHOWCASE_BUILD_NUMBER, @"receivedFrames": @(receivedFrames), @"timestampFallbacks": @(timestampFallbacks), @"viewers": @(viewers), @"controllers": @(controllers),
             @"mediaQueueBytes": @(queued), @"congestionRecoveries": @(congestionRecoveries),
+            @"sourceAVCProfile":@(decoderConfiguration.length>1 ? ((const uint8_t *)decoderConfiguration.bytes)[1] : 0),
             @"frameAgeMs": @(lastFrameAt ? (browser_now() - lastFrameAt) * 1000 : -1),
             @"renderers": @[@"jpeg",@"mjpeg",@"webcodecs",@"software",@"webrtc"], @"jpegSequence":@(jpegSequence),
             @"videoTimelineMicros":@(timelineMicros)} mutableCopy];

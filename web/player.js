@@ -10,6 +10,21 @@
   const metrics={received:0,bytes:0,drawn:0,reconnects:0,recoveries:0,lastReason:'首次连接',fallbackReason:null,lastDrawAt:null,lastFailure:null};
   const state=message=>{$('state').textContent=message;};
   const notice=message=>{$('notice').textContent=message;$('notice').hidden=!message;};
+  function updateOptions(status) {
+    for(const option of $('renderer').options) {
+      let reason=backends.unsupported(option.value);
+      if(option.value==='software' && status?.sourceAVCProfile && status.sourceAVCProfile!==66)
+        reason='当前 H.264 Profile '+status.sourceAVCProfile+' 不支持 Baseline 软件解码';
+      option.disabled=!!reason;option.textContent=backends.labels[option.value]+(reason?'（'+reason+'）':'');
+    }
+  }
+  function imageFailure(status) {
+    if((mode!=='jpeg' && mode!=='mjpeg') || displayed || !status?.jpegLastError)return;
+    const message=status.jpegRecoveryExhausted ? '手机图片解码失败：'+status.jpegLastError+'；请复制诊断' :
+      status.jpegDecoderBackend==='ffmpeg' ? '系统解码不可用，正在用 CPU 解码等待关键帧…' :
+      '手机图片解码器正在恢复：'+status.jpegLastError;
+    notice(message);
+  }
   function send(object) {
     if(control?.readyState!==WebSocket.OPEN) {
       if(object.type.startsWith('rtc-') && signals.length<16)signals.push(object);
@@ -90,7 +105,10 @@
     closeSockets();if(!desired || document.hidden)return;const current=++epoch;
     state('正在连接 · '+backends.labels[mode]);notice('等待 CarPlay 画面…');
     let status;
-    try { status=await readStatus();if(current!==epoch)return;
+    try { status=await readStatus();if(current!==epoch)return;updateOptions(status);
+      if(mode==='software' && status.sourceAVCProfile && status.sourceAVCProfile!==66) {
+        recover('Broadway 软件解码仅支持 Baseline，当前 Profile '+status.sourceAVCProfile+' 不兼容');return;
+      }
       if(status.viewers || status.controllers){scheduleReconnect('其他页面仍占用连接，请关闭');return;}
       active=status.active && status.configured;
     } catch(error) { if(current===epoch)scheduleReconnect(error.message);return; }
@@ -152,9 +170,10 @@
   setInterval(async()=>{
     if(!desired || document.hidden || statusBusy || control?.readyState!==WebSocket.OPEN)return;
     statusBusy=true;const current=epoch;
-    try { const status=await readStatus();if(current!==epoch)return;active=status.active && status.configured;
+    try { const status=await readStatus();if(current!==epoch)return;updateOptions(status);active=status.active && status.configured;
       if(!active){release();resetRenderer();config=null;notice('保持 Showcase 在前台，并连接发送 iPhone');}
       else if(mode==='mjpeg' && (!config || config.generation!==status.generation))makeRenderer({generation:status.generation,width:status.width,height:status.height});
+      imageFailure(status);
       const stats=renderer?.stats();
       const receiving=stats?.inputFrames>=3 && stats.lastInputAgeMs<1500 || mode==='webrtc' && status.rtcConnected && status.receivedFrames-lastDrawSource>=3 && status.frameAgeMs>=0 && status.frameAgeMs<1500;
       if(receiving && stats?.lastDrawAgeMs>3000 && mode!=='mjpeg')recover('持续收帧但画面未推进');
@@ -162,7 +181,7 @@
     finally { statusBusy=false; }
   },1500);
   $('renderer').value=mode;
-  for(const option of $('renderer').options) { const reason=backends.unsupported(option.value);if(reason){option.disabled=true;option.textContent+='（'+reason+'）';} }
+  updateOptions(null);
   if(backends.unsupported(mode)){metrics.fallbackReason=backends.unsupported(mode);mode='jpeg';$('renderer').value=mode;}
   $('renderer').onchange=()=>{release();mode=$('renderer').value;try{localStorage.setItem('showcase.renderer.v1',mode);}catch(_){}
     metrics.fallbackReason=null;desired=true;failures=[];retry=0;metrics.lastReason='切换显示方式';connect();};

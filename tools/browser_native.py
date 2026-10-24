@@ -12,6 +12,7 @@ PINS = {
     # Mbed TLS and the corrected datagram read length in libdatachannel.
     'libdatachannel': ('https://github.com/paullouisageneau/libdatachannel.git', 'v0.24.6', '6b1e2e620f1e37f0eafeee702eaea0043cb305fd'),
     'mbedtls': ('https://github.com/Mbed-TLS/mbedtls.git', 'mbedtls-3.6.6', '0bebf8b8c7f07abe3571ded48a11aa907a1ffb20'),
+    'ffmpeg': ('https://github.com/FFmpeg/FFmpeg.git', 'n8.1.3', '1041abdc962f4cc4f394aa8de9dc5236c0c3b9e7'),
 }
 
 def run(args):
@@ -36,6 +37,25 @@ def prepare(platform='macos'):
         if actual != revision:
             raise RuntimeError('Dependency revision mismatch: ' + name)
     prefix = target / 'installed'
+    ff = target / 'ffmpeg'
+    ff.mkdir(parents=True,exist_ok=True)
+    ffargs = [str((sources/'ffmpeg/configure').resolve()), '--prefix='+str(prefix.resolve()),
+              '--disable-everything','--disable-autodetect','--disable-programs','--disable-doc',
+              '--disable-network','--disable-shared','--enable-static','--enable-pic',
+              '--disable-avformat','--disable-avdevice','--disable-avfilter','--disable-swresample',
+              '--disable-hwaccels','--disable-videotoolbox','--enable-avcodec','--enable-avutil',
+              '--enable-swscale','--enable-decoder=h264','--enable-parser=h264']
+    if platform == 'ios':
+        sdk = subprocess.check_output(['xcrun','--sdk','iphoneos','--show-sdk-path'],text=True).strip()
+        cc = subprocess.check_output(['xcrun','--sdk','iphoneos','--find','clang'],text=True).strip()
+        ffargs += ['--enable-cross-compile','--target-os=darwin','--arch=arm64','--cc='+cc,
+                   '--sysroot='+sdk,'--extra-cflags=-target arm64-apple-ios16.2',
+                   '--extra-ldflags=-target arm64-apple-ios16.2']
+    else:
+        ffargs += ['--disable-x86asm'] # No NASM dependency on hosted Intel macOS.
+    subprocess.run(ffargs,cwd=ff,check=True)
+    subprocess.run(['make','-j'+str(min(4,os.cpu_count() or 2))],cwd=ff,check=True)
+    subprocess.run(['make','install'],cwd=ff,check=True)
     # Mbed TLS ships DTLS-SRTP disabled. Its library and installed public
     # headers must use the same explicit configuration for WebRTC media.
     config=sources/'mbedtls/include/mbedtls/mbedtls_config.h'
@@ -71,6 +91,7 @@ def prepare(platform='macos'):
     libraries = [main] + sorted(set(libraries) - {main})
     includes = [str(sources/'libdatachannel/include'), str(prefix/'include')]
     data = dict(pins=PINS_JSON, includes=includes, libraries=libraries,mbedtls_defines=['MBEDTLS_SSL_DTLS_SRTP'])
+    data['ffmpeg_configure']=ffargs
     notices = {}
     for name in PINS:
         checkout=sources/name

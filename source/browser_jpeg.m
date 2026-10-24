@@ -7,6 +7,10 @@
 #import <CoreGraphics/CoreGraphics.h>
 #import <ImageIO/ImageIO.h>
 #import <CoreImage/CoreImage.h>
+#include <libavcodec/avcodec.h>
+#include <libavutil/error.h>
+#include <libavutil/imgutils.h>
+#include <libswscale/swscale.h>
 #include <pthread.h>
 #include <time.h>
 #include <math.h>
@@ -27,6 +31,12 @@ static bool decoderFailed;
 static double retryAfter;
 static NSData *decoderConfig;
 static CIContext *imageContext;
+static AVCodecContext *softwareDecoder;
+static struct SwsContext *converter;
+static AVFrame *pendingSoftwareImage;
+static bool useSoftware;
+static NSString *fallbackReason;
+static NSDictionary *lastFailure;
 static ShowcaseJPEGOutput publish;
 static VTDecompressionSessionRef decoder;
 static CMVideoFormatDescriptionRef format;
@@ -43,10 +53,13 @@ static double jpeg_now(void) {
 }
 static void record_error(NSString *message, OSStatus status, bool recover) {
     pthread_mutex_lock(&jpegLock); errors++; lastError = message; lastStatus = status;
-    if (recover) {
+    lastFailure = @{@"message":message,@"status":@(status),@"generation":@(decodingGeneration),
+        @"backend":useSoftware ? @"ffmpeg" : @"videotoolbox",@"profile":@(avcProfile)};
+    if (recover && wantedGeneration==decodingGeneration) {
         needsKey = decoderFailed = true;
         dropped += pending.count; [pending removeAllObjects]; pendingBytes = 0;
         if (pendingImage) { CVPixelBufferRelease(pendingImage); pendingImage = NULL; }
+        av_frame_free(&pendingSoftwareImage);
     }
     pthread_mutex_unlock(&jpegLock);
 }
@@ -56,6 +69,31 @@ static void dispose_decoder(void) {
         VTDecompressionSessionInvalidate(decoder); CFRelease(decoder); decoder = NULL;
     }
     if (format) { CFRelease(format); format = NULL; }
+    avcodec_free_context(&softwareDecoder);
+    sws_freeContext(converter); converter = NULL;
+}
+static CVPixelBufferRef convert_software_picture(AVFrame *frame) {
+    if (frame->width<=0 || frame->height<=0 || frame->width>4096 || frame->height>4096) return NULL;
+    int width=MIN(frame->width,1280),height=MAX(1,frame->height*width/frame->width);
+    CVPixelBufferRef image=NULL;
+    if (CVPixelBufferCreate(kCFAllocatorDefault,width,height,kCVPixelFormatType_32BGRA,NULL,&image)) return NULL;
+    if (CVPixelBufferLockBaseAddress(image,0)) { CVPixelBufferRelease(image); return NULL; }
+    converter=sws_getCachedContext(converter,frame->width,frame->height,(enum AVPixelFormat)frame->format,
+        width,height,AV_PIX_FMT_BGRA,SWS_BILINEAR,NULL,NULL,NULL);
+    int rows=0;
+    if (converter) {
+        int color = frame->colorspace==AVCOL_SPC_BT709 ? SWS_CS_ITU709 :
+            frame->colorspace==AVCOL_SPC_BT2020_NCL ? SWS_CS_BT2020 : SWS_CS_ITU601;
+        const int *coefficients=sws_getCoefficients(color);
+        sws_setColorspaceDetails(converter,coefficients,frame->color_range==AVCOL_RANGE_JPEG,
+            coefficients,1,0,1<<16,1<<16);
+        uint8_t *pixels[4]={CVPixelBufferGetBaseAddress(image),NULL,NULL,NULL};
+        int strides[4]={(int)CVPixelBufferGetBytesPerRow(image),0,0,0};
+        rows=sws_scale(converter,(const uint8_t *const *)frame->data,frame->linesize,0,frame->height,pixels,strides);
+    }
+    CVPixelBufferUnlockBaseAddress(image,0);
+    if (rows!=height) { CVPixelBufferRelease(image); return NULL; }
+    return image;
 }
 static void encode_picture(CVImageBufferRef image, CMTime pts, uint32_t stream) {
     @autoreleasepool {
@@ -70,9 +108,19 @@ static void encode_picture(CVImageBufferRef image, CMTime pts, uint32_t stream) 
          * be NV12 (video/full range), including padded planes. Core Image
          * handles its color attachments/strides separately. A software
          * context also works in the root helper without a UIKit/GPU surface. */
-        if (!imageContext) imageContext = [CIContext contextWithOptions:@{kCIContextUseSoftwareRenderer:@YES}];
-        CIImage *source = [CIImage imageWithCVPixelBuffer:image];
-        CGImageRef full = [imageContext createCGImage:source fromRect:CGRectMake(0,0,width,height)];
+        CGImageRef full=NULL;
+        bool bgra=CVPixelBufferGetPixelFormatType(image)==kCVPixelFormatType_32BGRA;
+        if (bgra) {
+            CVPixelBufferLockBaseAddress(image,kCVPixelBufferLock_ReadOnly);
+            CGContextRef context=CGBitmapContextCreate(CVPixelBufferGetBaseAddress(image),width,height,8,
+                CVPixelBufferGetBytesPerRow(image),rgb,kCGBitmapByteOrder32Little|kCGImageAlphaPremultipliedFirst);
+            full=context ? CGBitmapContextCreateImage(context) : NULL;
+            if (context) CGContextRelease(context);
+        } else {
+            if (!imageContext) imageContext = [CIContext contextWithOptions:@{kCIContextUseSoftwareRenderer:@YES}];
+            CIImage *source = [CIImage imageWithCVPixelBuffer:image];
+            full = [imageContext createCGImage:source fromRect:CGRectMake(0,0,width,height)];
+        }
         CGSize visible = CMVideoFormatDescriptionGetPresentationDimensions(format,true,true);
         size_t visibleWidth = visible.width > 0 ? MIN(width,(size_t)llround(visible.width)) : width;
         size_t visibleHeight = visible.height > 0 ? MIN(height,(size_t)llround(visible.height)) : height;
@@ -99,6 +147,7 @@ static void encode_picture(CVImageBufferRef image, CMTime pts, uint32_t stream) 
         if (scaled) CGContextRelease(scaled);
         if (cropped) CGImageRelease(cropped);
         if (full) CGImageRelease(full);
+        if (bgra) CVPixelBufferUnlockBaseAddress(image,kCVPixelBufferLock_ReadOnly);
         CGColorSpaceRelease(rgb);
         if (!success || !data.length || data.length > 2 * 1024 * 1024) { record_error(@"JPEG pixel conversion/encoding failed or image too large",0,false); return; }
         pthread_mutex_lock(&jpegLock);
@@ -109,6 +158,36 @@ static void encode_picture(CVImageBufferRef image, CMTime pts, uint32_t stream) 
         if (current) output(stream, micros, data);
     }
 }
+static void queue_picture(CVImageBufferRef image,AVFrame *software,CMTime pts) {
+    AVFrame *copy = software ? av_frame_clone(software) : NULL;
+    if (software && !copy) { record_error(@"JPEG CPU picture allocation failed",AVERROR(ENOMEM),false); return; }
+    pthread_mutex_lock(&jpegLock); decoded++;
+    if (wantedGeneration != decodingGeneration || !publish) { pthread_mutex_unlock(&jpegLock); av_frame_free(&copy); return; }
+    pixelFormat = image ? CVPixelBufferGetPixelFormatType(image) : kCVPixelFormatType_32BGRA;
+    consecutiveFailures = 0; decoderFailed = false;
+    if (pendingImage) CVPixelBufferRelease(pendingImage);
+    av_frame_free(&pendingSoftwareImage);
+    pendingImage = image ? CVPixelBufferRetain(image) : NULL;
+    pendingSoftwareImage = copy;
+    pendingImageTime = pts; pendingImageGeneration = decodingGeneration;
+    if (!imageScheduled) {
+        imageScheduled = true;
+        double wait = MAX(0,lastEncoded + 1.0/15 - jpeg_now());
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(wait*NSEC_PER_SEC)),queue,^{
+            pthread_mutex_lock(&jpegLock);
+            CVImageBufferRef latest = pendingImage; CMTime time = pendingImageTime; uint32_t stream = pendingImageGeneration;
+            AVFrame *software = pendingSoftwareImage; pendingSoftwareImage = NULL;
+            pendingImage = NULL; imageScheduled = false;
+            pthread_mutex_unlock(&jpegLock);
+            if (software) {
+                latest=convert_software_picture(software); av_frame_free(&software);
+                if (!latest) record_error(@"JPEG CPU color conversion failed",0,false);
+            }
+            if (latest) { encode_picture(latest,time,stream); CVPixelBufferRelease(latest); }
+        });
+    }
+    pthread_mutex_unlock(&jpegLock);
+}
 static void picture(void *unused, void *ref, OSStatus status, VTDecodeInfoFlags flags,
                     CVImageBufferRef image, CMTime pts, CMTime duration) {
     (void)unused; (void)ref; (void)duration;
@@ -117,23 +196,38 @@ static void picture(void *unused, void *ref, OSStatus status, VTDecodeInfoFlags 
         if (!(flags & kVTDecodeInfo_FrameDropped)) record_error(@"JPEG decoder returned no image",0,true);
         return;
     }
-    pthread_mutex_lock(&jpegLock); decoded++;
-    if (wantedGeneration != decodingGeneration || !publish) { pthread_mutex_unlock(&jpegLock); return; }
-    pixelFormat = CVPixelBufferGetPixelFormatType(image); consecutiveFailures = 0; decoderFailed = false;
-    if (pendingImage) CVPixelBufferRelease(pendingImage);
-    pendingImage = CVPixelBufferRetain(image); pendingImageTime = pts; pendingImageGeneration = decodingGeneration;
-    if (!imageScheduled) {
-        imageScheduled = true;
-        double wait = MAX(0,lastEncoded + 1.0/15 - jpeg_now());
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(wait*NSEC_PER_SEC)),queue,^{
-            pthread_mutex_lock(&jpegLock);
-            CVImageBufferRef latest = pendingImage; CMTime time = pendingImageTime; uint32_t stream = pendingImageGeneration;
-            pendingImage = NULL; imageScheduled = false;
-            pthread_mutex_unlock(&jpegLock);
-            if (latest) { encode_picture(latest,time,stream); CVPixelBufferRelease(latest); }
-        });
+    queue_picture(image,NULL,pts);
+}
+static OSStatus configure_software(NSData *avcc) {
+    const AVCodec *codec=avcodec_find_decoder(AV_CODEC_ID_H264);
+    if (!codec || !(softwareDecoder=avcodec_alloc_context3(codec))) return AVERROR(ENOMEM);
+    softwareDecoder->thread_count=2; softwareDecoder->thread_type=FF_THREAD_SLICE;
+    softwareDecoder->max_pixels=4096LL*4096;
+    softwareDecoder->pkt_timebase=(AVRational){1,1000000};
+    softwareDecoder->extradata=av_mallocz(avcc.length+AV_INPUT_BUFFER_PADDING_SIZE);
+    if (!softwareDecoder->extradata) return AVERROR(ENOMEM);
+    memcpy(softwareDecoder->extradata,avcc.bytes,avcc.length); softwareDecoder->extradata_size=(int)avcc.length;
+    return avcodec_open2(softwareDecoder,codec,NULL);
+}
+static void decode_software(NSData *data,int64_t micros,bool key) {
+    AVPacket *packet=av_packet_alloc(); AVFrame *frame=av_frame_alloc();
+    int error = packet && frame ? av_new_packet(packet,(int)data.length) : AVERROR(ENOMEM);
+    if (!error) {
+        memcpy(packet->data,data.bytes,data.length); packet->pts=packet->dts=micros;
+        if (key) packet->flags|=AV_PKT_FLAG_KEY;
+        error=avcodec_send_packet(softwareDecoder,packet);
     }
-    pthread_mutex_unlock(&jpegLock);
+    av_packet_free(&packet);
+    if (!error) {
+        while ((error=avcodec_receive_frame(softwareDecoder,frame))==0) {
+            int64_t stamp=frame->pts==AV_NOPTS_VALUE ? micros : frame->pts;
+            queue_picture(NULL,frame,CMTimeMake(stamp,1000000)); av_frame_unref(frame);
+        }
+        if (error==AVERROR(EAGAIN) || error==AVERROR_EOF) error=0;
+    }
+    av_frame_free(&frame);
+    if (error) { char text[AV_ERROR_MAX_STRING_SIZE]; av_strerror(error,text,sizeof(text));
+        record_error([NSString stringWithFormat:@"JPEG CPU H.264 decoder: %s",text],error,true); }
 }
 static OSStatus configure_decoder(NSData *avcc) {
     const uint8_t *p = avcc.bytes; size_t size = avcc.length, at = 6;
@@ -152,6 +246,7 @@ static OSStatus configure_decoder(NSData *avcc) {
     OSStatus status = CMVideoFormatDescriptionCreateFromH264ParameterSets(kCFAllocatorDefault, total,
         parameters, lengths, 4, &format);
     if (status) return status;
+    if (useSoftware) return configure_software(avcc);
     VTDecompressionOutputCallbackRecord callback = {picture, NULL};
     status = VTDecompressionSessionCreate(kCFAllocatorDefault, format, NULL,
         NULL, &callback, &decoder);
@@ -160,7 +255,7 @@ static OSStatus configure_decoder(NSData *avcc) {
 static void run_worker(void) {
     unsigned batch = 0;
     for (;;) @autoreleasepool {
-        if (++batch > 8) { dispatch_async(queue,^{ run_worker(); }); return; }
+        if (++batch > (useSoftware ? 2 : 8)) { dispatch_async(queue,^{ run_worker(); }); return; }
         pthread_mutex_lock(&jpegLock);
         bool configure = configurationPending;
         NSData *config = nextConfig; uint32_t next = nextGeneration;
@@ -174,6 +269,7 @@ static void run_worker(void) {
             decoderConfig = config;
             pthread_mutex_lock(&jpegLock); decodingGeneration = next; lastEncoded = -1;
             decoderFailed = false; consecutiveFailures = 0; retryAfter = 0; pixelFormat = 0;
+            useSoftware=false; fallbackReason=nil;
             avcProfile = config.length > 1 ? ((const uint8_t *)config.bytes)[1] : 0;
             lastError = nil; lastStatus = 0;
             pthread_mutex_unlock(&jpegLock);
@@ -184,7 +280,10 @@ static void run_worker(void) {
         pthread_mutex_lock(&jpegLock);
         bool failed = decoderFailed;
         bool recover = failed && [frame[@"key"] boolValue] && consecutiveFailures < 3 && jpeg_now() >= retryAfter;
-        if (recover) { recoveryCount++; consecutiveFailures++; retryAfter = jpeg_now()+2; decoderFailed = false; }
+        if (recover) {
+            recoveryCount++; consecutiveFailures++; retryAfter = jpeg_now()+2; decoderFailed = false;
+            if (!useSoftware) { fallbackReason=lastError ?: @"VideoToolbox unavailable"; useSoftware=true; }
+        }
         if (failed && !recover) { needsKey = true; dropped++; }
         pthread_mutex_unlock(&jpegLock);
         if (failed && !recover) continue;
@@ -192,6 +291,10 @@ static void run_worker(void) {
             dispose_decoder();
             OSStatus error = configure_decoder(decoderConfig);
             if (error) { record_error([NSString stringWithFormat:@"JPEG decoder recovery: %d",(int)error],error,true); continue; }
+        }
+        if (useSoftware) {
+            if (softwareDecoder) decode_software(frame[@"data"],[frame[@"time"] longLongValue],[frame[@"key"] boolValue]);
+            continue;
         }
         if (!decoder) continue;
         NSData *data = frame[@"data"];
@@ -211,6 +314,21 @@ static void run_worker(void) {
         if (!status) status = VTDecompressionSessionDecodeFrame(decoder, sample, 0, NULL, NULL);
         if (sample) CFRelease(sample); if (block) CFRelease(block);
         if (status) record_error([NSString stringWithFormat:@"JPEG decode submission: %d", (int)status],status,true);
+        /* The first IDR is still owned here. Replay it through the CPU
+         * decoder immediately after a synchronous VT failure, rather than
+         * losing the only keyframe of a mostly-static CarPlay screen. */
+        pthread_mutex_lock(&jpegLock);
+        bool fallbackNow=decoderFailed && !useSoftware && wantedGeneration==decodingGeneration && publish && [frame[@"key"] boolValue];
+        if (fallbackNow) {
+            fallbackReason=lastError; useSoftware=true; decoderFailed=false; needsKey=false;
+            recoveryCount++; consecutiveFailures++; retryAfter=jpeg_now()+2;
+        }
+        pthread_mutex_unlock(&jpegLock);
+        if (fallbackNow) {
+            dispose_decoder(); OSStatus error=configure_decoder(decoderConfig);
+            if (error) record_error([NSString stringWithFormat:@"JPEG CPU decoder creation: %d",(int)error],error,true);
+            else decode_software(data,[frame[@"time"] longLongValue],true);
+        }
     }
 }
 static void schedule_locked(void) {
@@ -222,6 +340,7 @@ void showcase_jpeg_configure(uint32_t generation, NSData *avcc, ShowcaseJPEGOutp
     wantedGeneration = nextGeneration = generation; nextConfig = avcc; publish = output;
     configurationPending = true; needsKey = true; [pending removeAllObjects]; pendingBytes = 0;
     if (pendingImage) { CVPixelBufferRelease(pendingImage); pendingImage = NULL; }
+    av_frame_free(&pendingSoftwareImage);
     if (!pending) pending = [NSMutableArray array]; schedule_locked();
     pthread_mutex_unlock(&jpegLock);
 }
@@ -248,6 +367,8 @@ NSDictionary *showcase_jpeg_stats(void) {
         @"jpegLastError": lastError ?: @"", @"jpegMaxFps": @15, @"jpegMaxWidth": @1280,
         @"jpegLastStatus":@(lastStatus), @"jpegPixelFormat":@(pixelFormat), @"jpegAVCProfile":@(avcProfile),
         @"jpegRecoveryCount":@(recoveryCount), @"jpegRecoveryExhausted":@(decoderFailed && consecutiveFailures>=3),
-        @"jpegLastEncodedMicros":@(lastEncodedMicros), @"jpegImagePending":@(pendingImage!=NULL)};
+        @"jpegDecoderBackend":wantedGeneration ? (useSoftware ? @"ffmpeg" : @"videotoolbox") : @"inactive",
+        @"jpegFallbackReason":fallbackReason ?: @"", @"jpegLastFailure":lastFailure ?: @{},
+        @"jpegLastEncodedMicros":@(lastEncodedMicros), @"jpegImagePending":@(pendingImage!=NULL || pendingSoftwareImage!=NULL)};
     pthread_mutex_unlock(&jpegLock); return state;
 }

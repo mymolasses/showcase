@@ -1,13 +1,14 @@
-**Showcase+ v1.3.3**，应用／包版本 **1.3.3**，构建 **1010**。适用于 iOS 16.2+ / arm64 / Dopamine rootless。
+**Showcase+ v1.3.4**，应用／包版本 **1.3.4**，构建 **1011**。适用于 iOS 16.2+ / arm64 / Dopamine rootless。
 
-- 调整 JPEG / MJPEG 共用的手机解码链路：不再强制 VideoToolbox 输出 BGRA，由解码器选择原生像素格式，再通过软件 Core Image 转换、裁切和 JPEG 编码。增加样本关键帧标记。
-- JPEG 解码出错后清掉失效参考链，从关键帧重建解码器；连续失败最多重建三次，间隔至少两秒，新配置或成功解码后恢复预算。诊断新增 AVC Profile、原生像素格式、错误状态和恢复次数。`-12780` 的设备端根因尚未确认，需在用户的 iPhone 14 Pro Max / iOS 16.2 上验证。
-- 修复前后台切换后发送手机没有重发 VideoConfig 时网页一直等待的问题，恢复同一会话的缓存配置并请求关键帧，旧触摸代次继续失效。真正断开屏幕会话仍清理配置。
-- 加固强制退出后重开的恢复流程：串行执行旧服务恢复与认证启动；认证 socket、launchctl、ioreg 的等待有上限；被中断的认证请求不会无限占用服务。屏幕属性在主线程读取，Wi-Fi 总线探测单独异步执行，补充启动阶段日志。这些改动覆盖代码中确认的等待风险，不代表已经复现或确认用户 App 无法打开的根因；必要时仍需 app.log / iOS 崩溃记录。
-- 扩展验证：真实原生 JPEG 的 Baseline 1920×1080、Main / High 1600×900 图片、裁切、方向和静态帧刷新；注入解码输出失败后的恢复、持续失败预算和新会话恢复；不重发 VideoConfig 的前台恢复；挂起子进程和半截认证请求超时。保留真实 Chrome 五后端、HTTP / HTTPS、触摸、iOS arm64 签名和真实 Linux dpkg 升级解包检查。
+- 针对实机 JPEG / MJPEG 持续 `JPEG decoder output: -12780`、解码与图片计数均为零的问题，增加独立 FFmpeg CPU H.264 解码后备。系统解码失败后从关键帧切到 CPU，支持当前 High Profile 输入；后备解码与色彩转换不依赖 VideoToolbox / Core Image。仍通过 ImageIO 编码 JPEG，最多 15 fps、宽度最多 1280。
+- 系统解码首张 IDR 失败时，立即重放同一张关键帧给 CPU；即使发送端随后静止，也能提交最后一张 JPEG。参考链、输入与图片队列仍有上限，持续失败仍受恢复预算约束。
+- 网页选项按真实源 `sourceAVCProfile` 标注 Broadway Baseline 限制，High / Main 输入时禁用不兼容的软件选项；保存的旧选项也有明确回退原因。普通 HTTP 下 WebCodecs 仍需安全上下文，WebRTC 路径保留。
+- 手机图片解码失败会直接显示原因，不再只显示等待画面。新增 `jpegDecoderBackend`（`videotoolbox` / `ffmpeg`）、`jpegFallbackReason` 和持久的 `jpegLastFailure`。切换 WebRTC 后旧 JPEG 失败记录不代表 WebRTC 当前失败。
+- 固定 FFmpeg n8.1.3 的精确源码提交，仅构建 CPU H.264、图像转换和必要基础库，关闭硬件加速、网络和命令行程序；许可证随 deb 安装，原始源码与构建参数作为同一 Release 的附件提供。手机“关于”新增授权与源码入口。
+- 新增强制所有系统解码返回 `-12780` 的真实 High Profile JPEG / MJPEG 像素、裁切、方向、触摸和恢复测试；覆盖只发一张 IDR 后静止的 CPU 后备出图。保留原有 HTTP / HTTPS、多后端、前后台、iOS 编译签名和真实 dpkg 升级解包验证。
 
-安装后确认手机关于和网页诊断均为 **1.3.3 / 1010**。先检查手机 App 划掉重开，再测 JPEG / MJPEG 和前后台恢复。如果仍无法打开，请提供 `/var/mobile/Library/Showcase/logs/app.log` 末尾与相应 iOS 崩溃记录；如果图片仍为零，请复制包含新增 `jpeg*` 字段的完整网页诊断。
+安装后确认手机关于和网页诊断均为 **1.3.4 / 1011**。先测 JPEG，再测 MJPEG；若系统解码仍报错，预期 `jpegDecoderBackend` 变为 `ffmpeg`，`jpegDecodedFrames`、`jpegEncodedFrames`、`jpegSequence` 开始增长。仍无图时请复制完整诊断。保留 1.3.3 的启动恢复与前后台配置修复。
 
-WebCodecs 通常需要可信 HTTPS；旧的普通 HTTP 入口不保证能提供该 API。Broadway 软件模式仅支持兼容 Baseline 流，手机输出其他 Profile 时会回退 JPEG。WebRTC 仅用局域网 host ICE，仍可能受车机视频解码／显示策略影响。JPEG 增加手机编码和热点流量。具体条件、诊断和来源许可见 **BROWSER_MODES.md** 与 **THIRD_PARTY_BROWSER.md**。
+CPU 后备会增加手机负载和耗电，实际帧率取决于接收机；JPEG 也会增加热点流量。WebRTC 仅用局域网 host ICE，仍可能受车机视频策略影响。音频继续由发送手机走车载蓝牙，网页不加入音频或麦克风。显示条件和来源许可见 **BROWSER_MODES.md** 与 **THIRD_PARTY_BROWSER.md**。
 
 Release 流程执行上述自动验证、iOS arm64 编译、签名和 deb 内容／来源校验。提供 SHA256SUMS 和 build-provenance.json。自动验证不等于手机或实车兼容性验收，不承诺 D 档画面已恢复。

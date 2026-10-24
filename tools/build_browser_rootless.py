@@ -195,6 +195,16 @@ def main():
     native = prepare_native('ios')
     provenance['native_dependency_pins'] = native['pins']
     provenance['mbedtls_configuration_defines'] = native['mbedtls_defines']
+    ffmpeg_source = ROOT/'build/browser-native/sources/ffmpeg'
+    source_name = 'ffmpeg-n8.1.3-source.tar.gz'
+    subprocess.run(['git','-C',str(ffmpeg_source),'diff','--exit-code'],check=True)
+    source_data = subprocess.check_output(['git','-C',str(ffmpeg_source),'archive','--format=tar.gz',
+        '--prefix=ffmpeg-n8.1.3/','HEAD'])
+    (args.output/source_name).write_bytes(source_data)
+    provenance['ffmpeg_source'] = {'archive':source_name,'sha256':hashlib.sha256(source_data).hexdigest(),
+        'configure':native['ffmpeg_configure'],'patches':[]}
+    (args.output/'ffmpeg-build.json').write_text(json.dumps({'pins':native['pins']['ffmpeg'],
+        **provenance['ffmpeg_source']},indent=2)+'\n')
     provenance['browser_vendor_files'] = json.loads((ROOT/'web/vendor/broadway/provenance.json').read_text())
     unchanged = [APP + 'CarDisplaySim', 'var/jb/usr/bin/BTdaemon', 'var/jb/usr/lib/libBTstack.dylib']
     provenance['unchanged_runtime_sha256'] = {name: hashlib.sha256(payload[name][1]).hexdigest() for name in unchanged}
@@ -305,7 +315,9 @@ def main():
     for name in unchanged:
         assert hashlib.sha256(installed[name][1]).hexdigest() == provenance['unchanged_runtime_sha256'][name]
     sha = hashlib.sha256(output.read_bytes()).hexdigest()
-    (args.output / 'SHA256SUMS').write_text(sha + '  ' + NAME + '\n')
+    checksum_names = [NAME,source_name,'ffmpeg-build.json']
+    (args.output / 'SHA256SUMS').write_text(''.join(hashlib.sha256((args.output/name).read_bytes()).hexdigest()+
+        '  '+name+'\n' for name in checksum_names))
     (args.output / 'build-provenance.json').write_bytes(record)
     print('Built and archive-validated:', output)
     print('SHA256:', sha)

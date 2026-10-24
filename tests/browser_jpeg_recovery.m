@@ -1,5 +1,9 @@
 /* Include the production implementation in this test translation unit so
  * callback failures can be injected without adding a release-only test API. */
+#import <VideoToolbox/VideoToolbox.h>
+#include <stdatomic.h>
+static _Atomic bool forceHardwareFailure;
+#define VTDecompressionSessionDecodeFrame(...) (atomic_load(&forceHardwareFailure) ? (OSStatus)-12780 : VTDecompressionSessionDecodeFrame(__VA_ARGS__))
 #import "../source/browser_jpeg.m"
 #include <assert.h>
 #include <unistd.h>
@@ -47,6 +51,8 @@ int main(int argc,char **argv) { @autoreleasepool {
     assert(!showcase_jpeg_frame(1,0,false,frames[1]));
     progress(frames,1,before);
     assert([showcase_jpeg_stats()[@"jpegRecoveryCount"] unsignedIntValue]==1);
+    assert([showcase_jpeg_stats()[@"jpegDecoderBackend"] isEqual:@"ffmpeg"]);
+    assert([showcase_jpeg_stats()[@"jpegFallbackReason"] containsString:@"-12780"]);
     assert([showcase_jpeg_stats()[@"jpegPixelFormat"] unsignedIntValue]!=0);
     // Persistent creation failure exhausts a bounded recovery budget, instead
     // of creating a decoder on every input. A new config resets that budget.
@@ -61,6 +67,17 @@ int main(int argc,char **argv) { @autoreleasepool {
     before=[showcase_jpeg_stats()[@"jpegEncodedFrames"] unsignedLongLongValue];
     showcase_jpeg_configure(3,config,output);progress(frames,3,before);
     assert(!showcase_jpeg_frame(2,0,true,frames[0]));
+    // One IDR followed by a static screen: even if every system decode fails,
+    // replay that same IDR on CPU and flush its JPEG without further input.
+    before=[showcase_jpeg_stats()[@"jpegEncodedFrames"] unsignedLongLongValue];
+    atomic_store(&forceHardwareFailure,true);
+    showcase_jpeg_configure(4,config,output);
+    assert(showcase_jpeg_frame(4,0,true,frames[0]));
+    deadline=jpeg_now()+5;
+    while([showcase_jpeg_stats()[@"jpegEncodedFrames"] unsignedLongLongValue]<=before) {
+        assert(jpeg_now()<deadline);usleep(10000);
+    }
+    assert([showcase_jpeg_stats()[@"jpegDecoderBackend"] isEqual:@"ffmpeg"]);
     showcase_jpeg_stop();
-    puts("PASS: real native JPEG, injected output failure -> keyframe recovery, bounded retries, new generation recovery, stale input rejected");
+    puts("PASS: real JPEG, VT -12780 -> CPU H.264 pixels, bounded retries, new generation, stale input, single-IDR static screen fallback");
 } }
