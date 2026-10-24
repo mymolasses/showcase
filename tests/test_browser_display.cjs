@@ -9,7 +9,7 @@ const wire=data=>{
   return Buffer.concat([h,data]);
 };
 (async()=>{
-  let browser,page,timer,sequence=0,generation=1,width=1920,height=1080,profile={mode:'auto'},active=true;
+  let browser,page,timer,sequence=0,generation=1,width=1920,height=1080,profile={mode:'auto'},active=true,phoneDisplay={width:1920,height:900};
   const media=new Set(),controls=new Set(),sockets=new Set(),requests=[],touches=[],errors=[],images=new Map();
   const config=()=>{const b=Buffer.alloc(9);b[0]=1;b.writeUInt32BE(generation,1);b.writeUInt16BE(width,5);b.writeUInt16BE(height,7);return Buffer.concat([b,Buffer.from('0142001effe100046742001e01000268ce','hex')]);};
   async function image(w,h) {
@@ -23,14 +23,14 @@ const wire=data=>{
   let applying=false;
   async function apply(message) {
     requests.push(message);
-    const size=message.mode==='auto'?displaySize(message.width,message.height):message.mode==='phone'?{width:1920,height:900}:displaySize(...message.mode.split('x').map(Number));
+    const size=message.mode==='auto'?displaySize(message.width,message.height):message.mode==='phone'?phoneDisplay:displaySize(...message.mode.split('x').map(Number));
     assert(size);applying=true;await image(size.width,size.height);
     profile={...size,mode:message.mode};width=size.width;height=size.height;generation++;active=false;
     for(const socket of [...media,...controls])socket.destroy();
     setTimeout(()=>{active=true;applying=false;for(const socket of media)socket.write(wire(config()));},250);
   }
   const server=http.createServer((req,res)=>{
-    if(req.url==='/status') {res.setHeader('Content-Type','application/json');res.end(JSON.stringify({active,configured:active,width,height,generation,viewers:media.size,controllers:controls.size,frameAgeMs:5,receivedFrames:sequence,displayControl:true,displayRequest:profile,phoneDisplay:{width:1920,height:900},sourceAVCProfile:66}));return;}
+    if(req.url==='/status') {res.setHeader('Content-Type','application/json');res.end(JSON.stringify({active,configured:active,width,height,generation,viewers:media.size,controllers:controls.size,frameAgeMs:5,receivedFrames:sequence,displayControl:true,displayRequest:profile,phoneDisplay,sourceAVCProfile:66}));return;}
     if(req.url==='/blank'){res.end('<!doctype html><title>Fixture</title>');return;}
     const file=path.join(root,'web',req.url==='/'?'index.html':req.url.slice(1));
     if(req.url.includes('..')||!fs.existsSync(file)){res.writeHead(404);res.end();return;}
@@ -66,6 +66,9 @@ const wire=data=>{
     await page.setViewportSize({width:1366,height:768});await ready('auto',1366,768);assert.equal(requests.length,2);
     await page.click('#menu');await page.selectOption('#output-resolution','phone');await ready('phone',1920,900);
     const phoneCount=requests.length;await page.setViewportSize({width:1200,height:800});await page.waitForTimeout(3500);assert.equal(requests.length,phoneCount,'phone target must ignore browser resizing');
+    phoneDisplay={width:1920,height:886};await page.waitForTimeout(3500);
+    assert.equal(requests.length,phoneCount,'local island setting must not renegotiate the shared stream');
+    phoneDisplay={width:1920,height:900};
     await page.selectOption('#output-resolution','1600x1000');await ready('1600x1000',1600,1000);
     const rect=await page.locator('#surface').boundingBox();await page.mouse.click(rect.x+rect.width/2,rect.y+rect.height/2);
     await page.waitForTimeout(150);assert(touches.some(t=>t.phase===0&&t.x===800&&t.y===500&&t.generation===generation));

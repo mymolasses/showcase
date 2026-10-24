@@ -22,7 +22,13 @@
   }
   function outputTarget() {
     if(outputMode==='auto')return displaySize(viewport.width,viewport.height);
-    if(outputMode==='phone')return server?.phoneDisplay?.width ? server.phoneDisplay : null;
+    if(outputMode==='phone') {
+      // Island/phone scaling remains local. Rematch phone geometry only on
+      // an explicit output selection, not on every safe-area layout change.
+      if(!selectingOutput && server?.displayRequest?.mode==='phone' && server.displayRequest.width)
+        return {width:server.displayRequest.width,height:server.displayRequest.height};
+      return server?.phoneDisplay?.width ? server.phoneDisplay : null;
+    }
     const [width,height]=outputMode.split('x').map(Number);return displaySize(width,height);
   }
   function outputMatches() {
@@ -45,12 +51,12 @@
     if(!status?.displayControl){$('display-hint').textContent='接收机尚未提供输出比例控制';return;}
     const saved=status.displayRequest || {mode:'auto'};
     if(!outputInitialized || !selectingOutput){outputMode=saved.mode || 'auto';outputInitialized=true;}
-    if(saved.mode===outputMode)selectingOutput=false;
+    if(selectingOutput && outputMatches())selectingOutput=false;
     selector.value=outputMode;
     const target=outputTarget(), prefix=outputMode==='auto'?'车机浏览器':outputMode==='phone'?'手机屏幕':'固定输出';
     const actual=status.width && status.height ? `${status.width} × ${status.height}`:'等待视频';
     $('display-hint').textContent=status.displayError || `${prefix}：${target?`${target.width} × ${target.height}`:'等待尺寸'}；当前源 ${actual}。完整显示，不裁切。切换输出需重连 CarPlay。`;
-    queueOutput();
+    if(outputMode==='auto' || selectingOutput)queueOutput();
   }
   function updateOptions(status) {
     for(const option of $('renderer').options) {
