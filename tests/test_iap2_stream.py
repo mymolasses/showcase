@@ -98,6 +98,20 @@ int main(void) {
     reset(); iap2_detected=0; link_established=0;
     for(size_t i=0;i<sizeof(iap2_detect);i++) feed(iap2_detect+i,1);
     assert(iap2_detected && syn_count==1);
+    /* Complete the SYN handshake, including fragmented SYN-ACK bytes. */
+    uint8_t synack[]={0xff,0x5a,0,26,0xc0,0xf6,0,0,0,
+                     1,0x7f,0xff,0xff,5,0xdc,0,0x49,0x1e,3,1,0,2,3,2,1,0x2e};
+    synack[6]=my_initial_psn; synack[8]=checksum(synack,8);
+    for(size_t i=0;i<sizeof(synack);i++) feed(synack+i,1);
+    assert(link_established && peer_psn==0xf6);
+    n=frame(next,0xf7,1,0x1d00,0); feed(next,n);
+    assert(count==1 && messages[0]==0x1d00);
+
+    /* Two control messages may also share one iAP2 packet. */
+    reset(); n=frame(next,0xfb,1,0xaa05,6); next[12]=6;
+    const uint8_t inner[]={0x40,0x40,0,6,0x57,2};
+    memcpy(next+15,inner,sizeof(inner)); next[n-1]=checksum(next+9,n-10);
+    feed(next,n); assert(count==2 && messages[0]==0xaa05 && messages[1]==0x5702 && ack_count==1);
 
     /* Largest representable frame and input larger than the bounded buffer. */
     uint8_t *large=malloc(65535); assert(large);
