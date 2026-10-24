@@ -125,6 +125,7 @@ extern const void *btstack_set_power_mode, *btstack_set_discoverable;
 extern const void *btstack_set_system_bluetooth_enabled;
 extern const void *hci_write_local_name, *hci_write_class_of_device;
 extern const void *hci_write_extended_inquiry_response, *hci_write_simple_pairing_mode;
+extern const void *hci_delete_stored_link_key;
 extern const void *hci_accept_connection_request;
 extern const void *hci_disconnect;
 extern const void *hci_io_capability_request_reply, *hci_user_confirmation_request_reply;
@@ -437,6 +438,46 @@ static uint8_t ck(uint8_t *d, int l) {
 static void print_hci_addr(const char *prefix, const uint8_t *raw) {
     printf("%s%02X:%02X:%02X:%02X:%02X:%02X",
            prefix, raw[5], raw[4], raw[3], raw[2], raw[1], raw[0]);
+}
+
+/* Forgetting the car on the sender can leave only BTstack's old bond behind.
+ * On PIN_OR_KEY_MISSING, retry pairing once with that known phone's key
+ * removed. The command also removes BTstack's host-side key database entry;
+ * delete_all=0 must never be changed to a global Bluetooth reset. */
+static uint16_t bond_recovery_handle = UINT16_MAX;
+static uint8_t bond_recovery_address[6];
+static int bond_recovery_attempted = 0;
+static int bond_recovery_pending = 0;
+static void recover_missing_bluetooth_key(const uint8_t *pkt, uint16_t sz) {
+    if (!page_known || sz < 2 || (unsigned)pkt[1] + 2 > sz) return;
+    unsigned eventSize = (unsigned)pkt[1] + 2;
+    if (pkt[0] == 0x03 && eventSize >= 13 && pkt[2] == 0) {
+        uint8_t address[6];
+        for (int i = 0; i < 6; ++i) address[i] = pkt[10-i];
+        if (!memcmp(address, page_addr, sizeof(address))) {
+            bond_recovery_handle = R16(pkt, 3);
+            memcpy(bond_recovery_address, address, sizeof(address));
+            bond_recovery_pending = 0;
+        }
+    } else if (pkt[0] == 0x05 && eventSize >= 6 && pkt[2] == 0 &&
+               R16(pkt, 3) == bond_recovery_handle) {
+        bond_recovery_handle = UINT16_MAX;
+        if (bond_recovery_pending && !bond_recovery_attempted &&
+            !memcmp(bond_recovery_address, page_addr, 6)) {
+            bond_recovery_attempted = 1;
+            printf("[BT-BOND] Known iPhone reports PIN/key missing; removing only "
+                   "its stale link key once, then retrying normal pairing\n");
+            /* Wait for disconnect so the failed link is gone before the
+             * controller/host key is removed and normal paging retries. */
+            bt_send_cmd(&hci_delete_stored_link_key, page_addr, 0);
+        }
+        bond_recovery_pending = 0;
+    } else if (pkt[0] == 0x06 && eventSize >= 5 && pkt[2] == 0x06 &&
+               bond_recovery_handle != UINT16_MAX &&
+               !memcmp(bond_recovery_address, page_addr, 6) &&
+               R16(pkt, 3) == bond_recovery_handle && !bond_recovery_attempted) {
+        bond_recovery_pending = 1;
+    }
 }
 
 static void load_last_iphone(void) {
@@ -1328,6 +1369,8 @@ static void handler(uint8_t type, uint16_t ch, uint8_t *pkt, uint16_t sz) {
     }
     if (!sz) return;
     if(type==5||type!=4) return;
+
+    recover_missing_bluetooth_key(pkt, sz);
 
     /* Capture BD_ADDR from HCI Read BD_ADDR command complete */
     if(pkt[0]==0x0E && sz>=12 && !have_local_addr) {
