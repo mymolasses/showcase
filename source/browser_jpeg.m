@@ -10,6 +10,7 @@
 #include <libavcodec/avcodec.h>
 #include <libavutil/error.h>
 #include <libavutil/imgutils.h>
+#include <libavutil/mem.h>
 #include <libswscale/swscale.h>
 #include <pthread.h>
 #include <time.h>

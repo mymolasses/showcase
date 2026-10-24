@@ -2,6 +2,7 @@
  * callback failures can be injected without adding a release-only test API. */
 #import <VideoToolbox/VideoToolbox.h>
 #include <stdatomic.h>
+#include <stdbool.h>
 static _Atomic bool forceHardwareFailure;
 #define VTDecompressionSessionDecodeFrame(...) (atomic_load(&forceHardwareFailure) ? (OSStatus)-12780 : VTDecompressionSessionDecodeFrame(__VA_ARGS__))
 #import "../source/browser_jpeg.m"
