@@ -37,3 +37,13 @@ static inline SCDisplayRect sc_phone_area(double width,double height,double top,
     if (left+right>=width || top+bottom>=height) return (SCDisplayRect){0,0,width,height};
     return (SCDisplayRect){left,top,width-left-right,height-top-bottom};
 }
+static inline bool sc_display_touch(double vw,double vh,double cw,double ch,double x,double y,
+                                     bool fill,bool clamp,uint16_t *outX,uint16_t *outY) {
+    if (vw<=0 || vh<=0 || cw<=0 || ch<=0 || !isfinite(x) || !isfinite(y)) return false;
+    if (!clamp && (x<0 || y<0 || x>vw || y>vh)) return false;
+    x=fmax(0,fmin(vw,x)); y=fmax(0,fmin(vh,y));
+    double scale=fill ? fmax(vw/cw,vh/ch) : fmin(vw/cw,vh/ch);
+    double px=(x-(vw-cw*scale)/2)/scale, py=(y-(vh-ch*scale)/2)/scale;
+    if (!clamp && (px<0 || py<0 || px>cw || py>ch)) return false;
+    *outX=(uint16_t)lround(fmax(0,fmin(cw,px))); *outY=(uint16_t)lround(fmax(0,fmin(ch,py))); return true;
+}

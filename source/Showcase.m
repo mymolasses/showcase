@@ -2966,9 +2966,14 @@ static UIImage *showcase_star_image(CGFloat side);
             }
         }
     }
-    self.videoView.frame=self.fullscreenMode ? CGRectMake(area.x,area.y,area.width,area.height) : self.contentView.bounds;
-    ((AVSampleBufferDisplayLayer *)self.videoView.layer).videoGravity=[d boolForKey:PHONE_FILL_KEY]
-        ? AVLayerVideoGravityResizeAspectFill : AVLayerVideoGravityResizeAspect;
+    CGRect frame=self.fullscreenMode ? CGRectMake(area.x,area.y,area.width,area.height) : self.contentView.bounds;
+    AVLayerVideoGravity gravity=[d boolForKey:PHONE_FILL_KEY] ? AVLayerVideoGravityResizeAspectFill : AVLayerVideoGravityResizeAspect;
+    AVSampleBufferDisplayLayer *layer=(AVSampleBufferDisplayLayer *)self.videoView.layer;
+    if (!CGRectEqualToRect(self.videoView.frame,frame) || ![layer.videoGravity isEqual:gravity]) {
+        uint8_t cancel[14]={TOUCH_CANCEL}; uint64_t nanos=monotonic_nanos_now(); memcpy(cancel+6,&nanos,sizeof(nanos));
+        send_touch_records([NSData dataWithBytes:cancel length:sizeof(cancel)]);
+    }
+    self.videoView.frame=frame;layer.videoGravity=gravity;
 }
 - (void)viewSafeAreaInsetsDidChange { [super viewSafeAreaInsetsDidChange]; [self.view setNeedsLayout]; }
 
@@ -2981,20 +2986,12 @@ static UIImage *showcase_star_image(CGFloat side);
     return showcase_preferred_orientation();
 }
 
-- (BOOL)mapTouch:(UITouch *)touch toX:(uint16_t *)outX y:(uint16_t *)outY {
+- (BOOL)mapTouch:(UITouch *)touch toX:(uint16_t *)outX y:(uint16_t *)outY clamp:(BOOL)clamp {
     if (g_carplay_w <= 0 || g_carplay_h <= 0) return NO;
     CGPoint pt = [touch locationInView:self.videoView];
     CGSize vs = self.videoView.bounds.size;
-    float vw = vs.width, vh = vs.height;
-    float cw = g_carplay_w, ch = g_carplay_h;
     BOOL fill=[[NSUserDefaults standardUserDefaults] boolForKey:PHONE_FILL_KEY];
-    float scale=fill ? MAX(vw/cw,vh/ch) : MIN(vw/cw,vh/ch);
-    float rw=cw*scale, rh=ch*scale, rx=(vw-rw)/2, ry=(vh-rh)/2;
-    float nx = (pt.x - rx) / rw, ny = (pt.y - ry) / rh;
-    if (nx < 0 || nx > 1 || ny < 0 || ny > 1) return NO;
-    *outX = (uint16_t)(nx * cw);
-    *outY = (uint16_t)(ny * ch);
-    return YES;
+    return sc_display_touch(vs.width,vs.height,g_carplay_w,g_carplay_h,pt.x,pt.y,fill,clamp,outX,outY);
 }
 - (void)handleTouches:(NSSet<UITouch *> *)touches
                 event:(UIEvent *)event
@@ -3010,7 +3007,7 @@ static UIImage *showcase_star_image(CGFloat side);
         uint8_t contact = (uint8_t)(touch.hash & 0xff);
         for (UITouch *sample in samples) {
             uint16_t x = 0, y = 0;
-            if (![self mapTouch:sample toX:&x y:&y]) continue;
+            if (![self mapTouch:sample toX:&x y:&y clamp:phase!=TOUCH_DOWN]) continue;
             uint64_t timestampNs =
                 (uint64_t)llround(sample.timestamp * (double)NSEC_PER_SEC);
             uint8_t record[14] = { phase, contact };
@@ -3447,6 +3444,7 @@ typedef NS_ENUM(NSInteger, ConnectStep) {
     self.videoView = [[VideoView alloc] initWithFrame:content.bounds];
     self.videoView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     self.videoView.backgroundColor = [UIColor blackColor];
+    self.videoView.clipsToBounds=YES;
     ((AVSampleBufferDisplayLayer *)self.videoView.layer).videoGravity = AVLayerVideoGravityResizeAspect;
     [content addSubview:self.videoView];
     self.vc.videoView = self.videoView;

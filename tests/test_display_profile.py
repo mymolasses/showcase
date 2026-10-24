@@ -86,6 +86,11 @@ int main(void) {
     assert(left.x==59 && left.width==right.width);
     SCDisplayRect full=sc_phone_area(932,430,0,59,21,59,0);
     assert(full.x==0 && full.width==932 && full.height==430);
+    uint16_t tx,ty;
+    assert(sc_display_touch(873,409,1920,900,436.5,204.5,false,false,&tx,&ty) && tx==960 && ty==450);
+    assert(!sc_display_touch(873,409,1920,1080,874,204.5,true,false,&tx,&ty));
+    assert(sc_display_touch(873,409,1920,1080,874,204.5,true,true,&tx,&ty) && tx==1920 && ty==540);
+    assert(!sc_display_touch(873,409,1920,1080,0,204.5,false,false,&tx,&ty));
     for (int width=640;width<=6000;width+=137) for (int height=360;height<=4000;height+=91) {
         SCDisplaySize size=sc_display_fit(width,height);
         if (!size.width) { assert((double)width/height<.4 || (double)width/height>4); continue; }

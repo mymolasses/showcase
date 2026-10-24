@@ -23,6 +23,14 @@ harness=r'''
 #define BROWSER_OUTPUT_KEY @"restart-test-browser-output"
 #define MSG_PHONE_DISPLAY 12
 enum {StateIdle,StateStopping,StateActive};
+enum {UIApplicationStateActive};
+@interface UIApplication : NSObject
+@property int applicationState;
++ (instancetype)sharedApplication;
+@end
+@implementation UIApplication
++ (instancetype)sharedApplication { static UIApplication *app; if(!app)app=[UIApplication new];return app; }
+@end
 static volatile int g_touch_fd=-1;
 static volatile uint32_t g_touch_epoch=0;
 static void ip_log(const char *format,...) {(void)format;}
