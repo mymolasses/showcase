@@ -2,14 +2,56 @@
 (() => {
   'use strict';
   const $=id=>document.getElementById(id), surface=$('surface'), poster=$('poster'), display=$('display');
-  const {mapPoint,parsePacket}=ShowcaseProtocol, backends=ShowcaseRenderers;
+  const {mapPoint,parsePacket,displaySize}=ShowcaseProtocol, backends=ShowcaseRenderers;
   let mode='jpeg'; try { const saved=localStorage.getItem('showcase.renderer.v1');if(backends.labels[saved])mode=saved; } catch(_) {}
-  let desired=true, active=false, displayed=false, fill=true, config=null, renderer=null, media=null, control=null;
+  let desired=true, active=false, displayed=false, fill=false, config=null, renderer=null, media=null, control=null;
+  let outputMode='auto',outputInitialized=false,selectingOutput=false,outputTimer=null,lastOutputSent=-Infinity,viewport={};
   let epoch=0, retry=0, reconnectTimer=null, socketTimer=null, startupTimer=null, statusBusy=false, pointer=null;
   let pendingMove=null, moveFrame=null, signals=[], lastKeyRequest=-Infinity, failures=[], server=null, lastDrawSource=0;
   const metrics={received:0,bytes:0,drawn:0,reconnects:0,recoveries:0,lastReason:'首次连接',fallbackReason:null,lastDrawAt:null,lastFailure:null};
   const state=message=>{$('state').textContent=message;};
   const notice=message=>{$('notice').textContent=message;$('notice').hidden=!message;};
+  function measureViewport() {
+    const rect=surface.getBoundingClientRect(), visual=window.visualViewport;
+    const width=Math.min(window.innerWidth || rect.width,visual?.width || Infinity);
+    const height=Math.min(window.innerHeight || rect.height,visual?.height || Infinity);
+    if(visual?.scale && Math.abs(visual.scale-1)>.02)return; // Pinch zoom is not a new display.
+    if(surface.style){surface.style.width=width+'px';surface.style.height=height+'px';}
+    const density=Math.min(2,Math.max(1,window.devicePixelRatio || 1));
+    viewport={cssWidth:Math.round(width),cssHeight:Math.round(height),width:Math.round(width*density),height:Math.round(height*density)};
+  }
+  function outputTarget() {
+    if(outputMode==='auto')return displaySize(viewport.width,viewport.height);
+    if(outputMode==='phone')return server?.phoneDisplay?.width ? server.phoneDisplay : null;
+    const [width,height]=outputMode.split('x').map(Number);return displaySize(width,height);
+  }
+  function outputMatches() {
+    const target=outputTarget(), saved=server?.displayRequest;
+    const tolerance=outputMode==='auto' ? .01 : 0;
+    return target && saved?.mode===outputMode && Math.abs(saved.width-target.width)<=Math.max(2,target.width*tolerance) && Math.abs(saved.height-target.height)<=Math.max(2,target.height*tolerance);
+  }
+  function queueOutput() {
+    if(outputTimer!==null || !server?.displayControl || outputMatches())return;
+    outputTimer=setTimeout(()=>{
+      outputTimer=null;
+      if(!desired || document.hidden || !active || !outputTarget() || outputMatches() || performance.now()-lastOutputSent<8000)return;
+      if(send({type:'display',mode:outputMode,...(outputMode==='auto'?{width:viewport.width,height:viewport.height}:{})})) {
+        lastOutputSent=performance.now();$('display-hint').textContent='正在应用输出比例，CarPlay 将重新连接，请保持手机 App 在前台…';
+      }
+    },2000);
+  }
+  function updateOutput(status) {
+    const selector=$('output-resolution');selector.disabled=!status?.displayControl;
+    if(!status?.displayControl){$('display-hint').textContent='接收机尚未提供输出比例控制';return;}
+    const saved=status.displayRequest || {mode:'auto'};
+    if(!outputInitialized || !selectingOutput){outputMode=saved.mode || 'auto';outputInitialized=true;}
+    if(saved.mode===outputMode)selectingOutput=false;
+    selector.value=outputMode;
+    const target=outputTarget(), prefix=outputMode==='auto'?'车机浏览器':outputMode==='phone'?'手机屏幕':'固定输出';
+    const actual=status.width && status.height ? `${status.width} × ${status.height}`:'等待视频';
+    $('display-hint').textContent=status.displayError || `${prefix}：${target?`${target.width} × ${target.height}`:'等待尺寸'}；当前源 ${actual}。完整显示，不裁切。切换输出需重连 CarPlay。`;
+    queueOutput();
+  }
   function updateOptions(status) {
     for(const option of $('renderer').options) {
       let reason=backends.unsupported(option.value);
@@ -116,7 +158,7 @@
     control=new WebSocket(endpoint+'/control');
     const opened=()=>{if(current===epoch && control?.readyState===WebSocket.OPEN && (!media || media.readyState===WebSocket.OPEN)){clearTimeout(socketTimer);socketTimer=null;}};
     control.onopen=()=>{if(current!==epoch)return;opened();lastKeyRequest=-Infinity;
-      const queued=signals;signals=[];for(const message of queued)send(message);requestKey();};
+      const queued=signals;signals=[];for(const message of queued)send(message);requestKey();updateOutput(server);};
     if(mode==='mjpeg') {
       if(active)makeRenderer({generation:status.generation,width:status.width,height:status.height});
     } else {
@@ -159,7 +201,10 @@
   }
   for(const name of ['pointerup','pointercancel','lostpointercapture'])surface.addEventListener(name,lift);
   surface.addEventListener('contextmenu',event=>event.preventDefault());
-  window.addEventListener('blur',()=>release());window.addEventListener('resize',()=>release());
+  function resized(){release();measureViewport();clearTimeout(outputTimer);outputTimer=null;if(outputMode==='auto')queueOutput();}
+  window.addEventListener('blur',()=>release());window.addEventListener('resize',resized);
+  window.visualViewport?.addEventListener('resize',resized);
+  document.addEventListener('fullscreenchange',resized);
   window.addEventListener('pagehide',closeSockets);window.addEventListener('pageshow',event=>{if(event.persisted && desired)connect();});
   document.addEventListener('visibilitychange',()=>{if(document.hidden)closeSockets();else if(desired)connect();});
   setInterval(()=>{if(pointer!==null && config)send({type:'hold',generation:config.generation});},200);
@@ -173,7 +218,7 @@
     try { const status=await readStatus();if(current!==epoch)return;updateOptions(status);active=status.active && status.configured;
       if(!active){release();resetRenderer();config=null;notice('保持 Showcase 在前台，并连接发送 iPhone');}
       else if(mode==='mjpeg' && (!config || config.generation!==status.generation))makeRenderer({generation:status.generation,width:status.width,height:status.height});
-      imageFailure(status);
+      imageFailure(status);updateOutput(status);
       const stats=renderer?.stats();
       const receiving=stats?.inputFrames>=3 && stats.lastInputAgeMs<1500 || mode==='webrtc' && status.rtcConnected && status.receivedFrames-lastDrawSource>=3 && status.frameAgeMs>=0 && status.frameAgeMs<1500;
       if(receiving && stats?.lastDrawAgeMs>3000 && mode!=='mjpeg')recover('持续收帧但画面未推进');
@@ -187,13 +232,14 @@
     metrics.fallbackReason=null;desired=true;failures=[];retry=0;metrics.lastReason='切换显示方式';connect();};
   $('reconnect').onclick=()=>{metrics.reconnects++;metrics.lastReason='手动重连';desired=true;retry=0;failures=[];connect();};
   $('disconnect').onclick=()=>{desired=false;closeSockets();state('已断开，点重连恢复');notice('已断开');};
-  $('fit').onclick=()=>{release();fill=!fill;document.body.classList.toggle('contain',!fill);$('fit').textContent=fill?'显示：填满':'显示：等比';};
+  $('fit').onclick=()=>{release();fill=!fill;document.body.classList.toggle('contain',!fill);$('fit').textContent=fill?'显示：铺满（裁切）':'显示：完整';};
+  $('output-resolution').onchange=()=>{release();outputMode=$('output-resolution').value;selectingOutput=true;clearTimeout(outputTimer);outputTimer=null;lastOutputSent=-Infinity;queueOutput();};
   $('menu').onclick=()=>{$('toolbar').hidden=!$('toolbar').hidden;};
   let rateAt=performance.now(),rateReceived=0,rateBytes=0,rateDrawn=0,rates={receivedFps:0,presentedFps:null,bitrateMbps:0};
   function diagnosticSnapshot() {
     return {app:'Showcase+',version:server?.version || '等待接收机',build:server?.build || '',entry:location.origin,
       renderer:mode,rendererLabel:backends.labels[mode],fallbackReason:metrics.fallbackReason,lastFailure:metrics.lastFailure,
-      resolution:config?`${config.width} × ${config.height}`:'等待视频',...rates,...renderer?.stats(),
+      resolution:config?`${config.width} × ${config.height}`:'等待视频',outputMode,viewport,outputTarget:outputTarget(),displayFit:fill?'cover':'contain',...rates,...renderer?.stats(),
       receivedFrames:metrics.received,recoveryCount:metrics.recoveries,reconnectCount:metrics.reconnects,lastReason:metrics.lastReason,
       documentVisibility:document.visibilityState || (document.hidden?'hidden':'visible'),posterVisible:!poster.hidden,displayed,
       controlBufferedBytes:control?.bufferedAmount ?? 0,inputOwner:server?.inputOwner ?? 'none',sourceFrameAgeMs:server?.frameAgeMs ?? null,
@@ -218,5 +264,6 @@
   };
   $('fullscreen').onclick=()=>{const action=document.fullscreenElement?document.exitFullscreen?.():document.documentElement.requestFullscreen?.();action?.catch(()=>state('请使用车机浏览器菜单调整窗口'));};
   window.showcaseDiagnostics=diagnosticSnapshot;
+  measureViewport();
   connect();
 })();

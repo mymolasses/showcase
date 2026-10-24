@@ -15,6 +15,10 @@ static bool touch(uint8_t phase, uint16_t x, uint16_t y, uint8_t contact, uint64
     printf("TOUCH %u %u %u\n", phase, x, y); fflush(stdout); return true;
 }
 static void resync(void) { printf("KEY\n"); fflush(stdout); }
+static bool display(const char *mode,uint16_t width,uint16_t height,uint16_t vw,uint16_t vh) {
+    showcase_browser_phone_size(1920,886); /* Callback must run outside the bridge mutex. */
+    printf("DISPLAY %s %u %u %u %u\n",mode,width,height,vw,vh); fflush(stdout); return true;
+}
 static uint32_t be32(const uint8_t *p) { return ((uint32_t)p[0]<<24)|((uint32_t)p[1]<<16)|((uint32_t)p[2]<<8)|p[3]; }
 
 int main(int argc, char **argv) { @autoreleasepool {
@@ -33,6 +37,7 @@ int main(int argc, char **argv) { @autoreleasepool {
         [frames addObject:[fixture subdataWithRange:NSMakeRange(at, length)]]; at += length;
     }
     if (!frames.count || at != fixture.length) return 6;
+    if (getenv("SHOWCASE_TEST_DISPLAY")) showcase_browser_display_handler(display,320,180,1920,886);
     if (!showcase_browser_start(port, touch, resync)) return 7;
     uint16_t width = 320, height = 180;
     if (sscanf(argv[3], "%hux%hu", &width, &height) != 2) return 8;

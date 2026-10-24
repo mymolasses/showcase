@@ -7,6 +7,12 @@
 typedef bool (*ShowcaseBrowserTouch)(uint8_t phase, uint16_t x, uint16_t y,
                                     uint8_t contact, uint64_t hostNanos);
 typedef void (*ShowcaseBrowserResync)(void);
+typedef bool (*ShowcaseBrowserDisplay)(const char *mode, uint16_t width, uint16_t height,
+                                      uint16_t viewportWidth, uint16_t viewportHeight);
+void showcase_browser_display_handler(ShowcaseBrowserDisplay callback, uint16_t width, uint16_t height,
+                                      uint16_t phoneWidth, uint16_t phoneHeight);
+void showcase_browser_phone_size(uint16_t width, uint16_t height);
+void showcase_browser_reload_display(void);
 
 /* Foreground prototype. Media is copied into bounded queues; these calls never
  * write to a browser socket on the CarPlay receiver thread. */

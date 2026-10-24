@@ -20,6 +20,7 @@
 #include "browser_assets.h"
 #include "browser_jpeg.h"
 #include "browser_rtc.h"
+#include "browser_settings.h"
 #ifndef SHOWCASE_RELEASE_VERSION
 #define SHOWCASE_RELEASE_VERSION "development"
 #endif
@@ -73,6 +74,11 @@ static uint16_t localX, localY;
 static NSData *latestJPEG;
 static uint32_t jpegGeneration;
 static uint64_t jpegSequence;
+static ShowcaseBrowserDisplay displayCallback;
+static NSDictionary *displayRequest, *pendingDisplay;
+static NSString *displayError;
+static uint16_t negotiatedWidth, negotiatedHeight, phoneWidth, phoneHeight;
+static double lastDisplayRequest;
 
 static double browser_now(void) {
     struct timespec t;
@@ -226,6 +232,11 @@ static void handle_http(SCBrowserClient *c) {
             @"renderers": @[@"jpeg",@"mjpeg",@"webcodecs",@"software",@"webrtc"], @"jpegSequence":@(jpegSequence),
             @"videoTimelineMicros":@(timelineMicros)} mutableCopy];
         [state addEntriesFromDictionary:showcase_jpeg_stats()]; [state addEntriesFromDictionary:showcase_rtc_stats()];
+        state[@"displayControl"]=@(displayCallback != NULL);
+        state[@"displayRequest"]=displayRequest ?: @{ @"mode":@"auto" };
+        state[@"displayNegotiated"]=@{ @"width":@(negotiatedWidth), @"height":@(negotiatedHeight) };
+        state[@"phoneDisplay"]=@{ @"width":@(phoneWidth), @"height":@(phoneHeight) };
+        state[@"displayError"]=displayError ?: @"";
         http_reply(c, 200, @"application/json", [NSJSONSerialization dataWithJSONObject:state options:0 error:NULL]); return;
     }
     for (SCBrowserClient *other in clients) if (other != c &&
@@ -285,6 +296,26 @@ static void handle_control(SCBrowserClient *c, NSData *payload) {
     if (c.role != 2) { drop_client(c); return; }
     if ([type isEqual:@"release"]) { release_touch(c); c.heard = now; return; }
     if ([type isEqual:@"keyframe"]) { wantKey = true; c.heard = now; return; }
+    if ([type isEqual:@"display"]) {
+        NSString *mode=message[@"mode"];
+        if (![mode isKindOfClass:NSString.class] || mode.length>32) { drop_client(c); return; }
+        SCDisplaySize target=sc_display_preset(mode.UTF8String);
+        uint16_t vw=0, vh=0;
+        if ([mode isEqual:@"auto"]) {
+            double w,h;
+            if (!number(message,@"width",&w) || !number(message,@"height",&h) || floor(w)!=w || floor(h)!=h) { drop_client(c); return; }
+            target=sc_display_fit(w,h); if (target.width) { vw=(uint16_t)w; vh=(uint16_t)h; }
+        } else if ([mode isEqual:@"phone"]) target=(SCDisplaySize){phoneWidth,phoneHeight};
+        if (!target.width || !target.height) { drop_client(c); return; }
+        c.heard=now;
+        if (!displayCallback || !active || !configuration || pendingDisplay || now-lastDisplayRequest<8) return;
+        if ([displayRequest[@"mode"] isEqual:mode] && [displayRequest[@"width"] unsignedIntValue]==target.width &&
+            [displayRequest[@"height"] unsignedIntValue]==target.height) return;
+        release_touch(c); release_local();
+        pendingDisplay=@{ @"mode":mode,@"width":@(target.width),@"height":@(target.height),@"viewportWidth":@(vw),@"viewportHeight":@(vh) };
+        lastDisplayRequest=now;
+        return;
+    }
     if ([type isEqual:@"rtc-answer"] || [type isEqual:@"rtc-candidate"]) {
         double stream;
         bool valid = number(message,@"generation",&stream) && stream == generation;
@@ -423,10 +454,36 @@ static void *browser_loop(void *unused) {
         }
         bool request = wantKey && active && browser_now() - lastKeyAt >= 2;
         if (request) { wantKey = false; lastKeyAt = browser_now(); }
+        NSDictionary *nextDisplay=pendingDisplay;
         pthread_mutex_unlock(&browserLock);
         if (request && resyncCallback) resyncCallback();
+        if (nextDisplay && displayCallback) {
+            bool saved=displayCallback([nextDisplay[@"mode"] UTF8String],[nextDisplay[@"width"] unsignedIntValue],
+                [nextDisplay[@"height"] unsignedIntValue],[nextDisplay[@"viewportWidth"] unsignedIntValue],[nextDisplay[@"viewportHeight"] unsignedIntValue]);
+            pthread_mutex_lock(&browserLock);
+            if (saved) { displayRequest=nextDisplay; displayError=nil; }
+            else displayError=@"无法保存输出分辨率，请检查手机日志";
+            pendingDisplay=nil;
+            pthread_mutex_unlock(&browserLock);
+        }
     }
     return NULL;
+}
+
+void showcase_browser_display_handler(ShowcaseBrowserDisplay callback,uint16_t width,uint16_t height,uint16_t pw,uint16_t ph) {
+    NSDictionary *saved=showcase_display_configuration();
+    pthread_mutex_lock(&browserLock);
+    displayCallback=callback; negotiatedWidth=width; negotiatedHeight=height; phoneWidth=pw; phoneHeight=ph;
+    displayRequest=saved.count ? saved : @{ @"mode":@"auto" };
+    pendingDisplay=nil; displayError=nil; lastDisplayRequest=-INFINITY;
+    pthread_mutex_unlock(&browserLock);
+}
+void showcase_browser_phone_size(uint16_t width,uint16_t height) {
+    pthread_mutex_lock(&browserLock); phoneWidth=width; phoneHeight=height; pthread_mutex_unlock(&browserLock);
+}
+void showcase_browser_reload_display(void) {
+    NSDictionary *saved=showcase_display_configuration();
+    pthread_mutex_lock(&browserLock); displayRequest=saved.count ? saved : @{ @"mode":@"auto" }; pthread_mutex_unlock(&browserLock);
 }
 
 bool showcase_browser_start(uint16_t port, ShowcaseBrowserTouch touch,

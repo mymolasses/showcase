@@ -144,6 +144,7 @@ static bool g_receiver_audio = false;
  * displays mounted to the driver's right. */
 static bool g_right_hand_drive = false;
 static bool g_browser_enabled = false;
+static uint16_t g_phone_width=1920,g_phone_height=886;
 
 static void parse_args(int argc, char *argv[]) {
     for (int i = 1; i < argc; i++) {
@@ -156,12 +157,16 @@ static void parse_args(int argc, char *argv[]) {
             i++;
         } else if (!strcmp(argv[i], "--width") && i + 1 < argc) {
             long value = strtol(argv[++i], NULL, 10);
-            if (value >= 640 && value <= UINT16_MAX)
+            if (value >= 240 && value <= UINT16_MAX)
                 g_display_width = (uint16_t)value;
         } else if (!strcmp(argv[i], "--height") && i + 1 < argc) {
             long value = strtol(argv[++i], NULL, 10);
-            if (value >= 360 && value <= UINT16_MAX)
+            if (value >= 240 && value <= UINT16_MAX)
                 g_display_height = (uint16_t)value;
+        } else if (!strcmp(argv[i], "--phone-width") && i + 1 < argc) {
+            long value=strtol(argv[++i],NULL,10); if (value>=240 && value<=1920) g_phone_width=(uint16_t)value;
+        } else if (!strcmp(argv[i], "--phone-height") && i + 1 < argc) {
+            long value=strtol(argv[++i],NULL,10); if (value>=240 && value<=1080) g_phone_height=(uint16_t)value;
         } else if (!strcmp(argv[i], "--fps") && i + 1 < argc) {
             long value = strtol(argv[++i], NULL, 10);
             if (value >= 30 && value <= 60)
@@ -2852,6 +2857,9 @@ static bool screen_read_exact(int fd, uint8_t *buf, size_t len,
 #define MSG_APP_VISIBILITY 0x05 /* app → services, 1 while foreground */
 #define MSG_VIDEO_TIMING 0x06   /* services → app, uint32 latency in ms */
 #define MSG_VIDEO_RESYNC 0x07   /* app → services, renderer needs keyframe */
+#define MSG_DISPLAY_REQUEST 0x0B
+#define MSG_PHONE_DISPLAY 0x0C
+#define MSG_DISPLAY_PREF 0x0D
 #define VIDEO_FRAME_METADATA_SIZE 56
 /* STATUS_* codes are forward-declared at the top of the file. */
 
@@ -3809,6 +3817,13 @@ static void touch_reader_func(void *arg) {
             }
             free(payload);
             fflush(stdout);
+        } else if (type == MSG_DISPLAY_PREF && len == 1) {
+            uint8_t changed; if (!tcp_read_exact(fd,&changed,1)) break;
+            if (changed) showcase_browser_reload_display();
+        } else if (type == MSG_PHONE_DISPLAY && len == 4) {
+            uint8_t payload[4]; if (!tcp_read_exact(fd,payload,sizeof(payload))) break;
+            uint16_t w=payload[0]|(payload[1]<<8),h=payload[2]|(payload[3]<<8);
+            if (w>=240 && w<=1920 && h>=240 && h<=1080) showcase_browser_phone_size(w,h);
         } else if (type == MSG_APP_VISIBILITY && len == 1) {
             uint8_t visible = 0;
             if (!tcp_read_exact(fd, &visible, 1)) break;
@@ -6175,6 +6190,16 @@ static void start_mdns_reannounce_loop(DNSServiceRef airplayRef,
  * ═══════════════════════════════════════════════════════════════ */
 
 static volatile int32_t browser_resync_pending = 0;
+static bool browser_request_display(const char *mode,uint16_t width,uint16_t height,uint16_t vw,uint16_t vh) {
+    NSDictionary *config=@{ @"mode":@(mode),@"width":@(width),@"height":@(height),@"viewportWidth":@(vw),@"viewportHeight":@(vh) };
+    if (!showcase_save_display_configuration(config)) return false;
+    if (width!=g_display_width || height!=g_display_height) {
+        uint8_t payload[]={width&255,width>>8,height&255,height>>8};
+        app_send_msg(MSG_DISPLAY_REQUEST,payload,sizeof(payload));
+    }
+    printf("[DISPLAY] browser selected %s %ux%u viewport=%ux%u\n",mode,width,height,vw,vh); fflush(stdout);
+    return true;
+}
 static void browser_request_keyframe(void) {
     if (!__sync_bool_compare_and_swap(&browser_resync_pending, 0, 1)) return;
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
@@ -6220,6 +6245,7 @@ int main(int argc, char *argv[]) {
     }
 
     if (g_browser_enabled) {
+        showcase_browser_display_handler(browser_request_display,g_display_width,g_display_height,g_phone_width,g_phone_height);
         if (!showcase_browser_start(BROWSER_PORT,
                 queue_touch_report, browser_request_keyframe)) {
             fprintf(stderr, "[BROWSER] Cannot start local browser service on port %d\n", BROWSER_PORT);

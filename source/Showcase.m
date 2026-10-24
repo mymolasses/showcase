@@ -260,6 +260,9 @@ static void ip_log_open(void) {
 #define MSG_APP_VISIBILITY 0x05  /* app → services, 1 while foreground */
 #define MSG_VIDEO_TIMING  0x06   /* services → app, uint32 latency in ms */
 #define MSG_VIDEO_RESYNC  0x07   /* app → services, renderer needs keyframe */
+#define MSG_DISPLAY_REQUEST 0x0B /* services → app, requested LE16 width/height */
+#define MSG_PHONE_DISPLAY 0x0C   /* app → services, usable LE16 phone width/height */
+#define MSG_DISPLAY_PREF 0x0D    /* app → services, reload display preference */
 #define MSG_AUDIO_CONFIG  0x08   /* services → app, negotiated audio stream */
 #define MSG_AUDIO_PACKET  0x09   /* services → app, decrypted RTP payload */
 #define MSG_BT_HANDOFF    0x0A   /* services → app, end Bluetooth transport */
@@ -1158,6 +1161,14 @@ typedef struct {
 } CarPlayDisplayHardware;
 
 static int displayWLANAttachment;
+static uint32_t displayPhoneSize;
+static CarPlayDisplayHardware carplay_display_hardware(void);
+static SCDisplaySize phone_display_size(void) {
+    uint32_t packed=__atomic_load_n(&displayPhoneSize,__ATOMIC_RELAXED);
+    if (packed) return (SCDisplaySize){packed>>16,packed&65535};
+    CarPlayDisplayHardware h=carplay_display_hardware();
+    return sc_display_fit(h.nativeLong,h.nativeShort);
+}
 static CarPlayDisplayHardware carplay_display_hardware(void) {
     static CarPlayDisplayHardware hardware;
     static dispatch_once_t once;
@@ -1218,10 +1229,12 @@ static CarPlayDisplayProfile preferred_carplay_display_profile(void) {
         .wlanAttachment = h.wlanAttachment,
     };
     if ([d boolForKey:BROWSER_OUTPUT_KEY]) {
-        NSInteger height = [d integerForKey:BROWSER_QUALITY_KEY];
-        if (height != 720 && height != 900 && height != 1080) height = 1080;
-        profile.width = (uint16_t)(height * 16 / 9);
-        profile.height = (uint16_t)height;
+        NSDictionary *config=showcase_display_configuration();
+        NSString *mode=config[@"mode"];
+        SCDisplaySize output=[mode isEqual:@"phone"] ? phone_display_size() :
+            sc_display_fit([config[@"width"] doubleValue],[config[@"height"] doubleValue]);
+        if (!output.width) output=(SCDisplaySize){1920,1080}; /* Until a browser reports its usable area. */
+        profile.width=output.width; profile.height=output.height;
         profile.framesPerSecond = 30;
     }
     return profile;
@@ -2924,26 +2937,40 @@ static UIImage *showcase_star_image(CGFloat side);
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
     if (self.contentView == self.view) {
-        self.contentView.frame = self.view.bounds;
         self.contentView.transform = CGAffineTransformIdentity;
-        return;
-    }
-
-    if (self.fullscreenMode) {
+    } else if (self.fullscreenMode) {
         /* iPhone Active: drop the 1024x768 canvas; let video fill the screen. */
         self.contentView.transform = CGAffineTransformIdentity;
         self.contentView.bounds = self.view.bounds;
         self.contentView.center = CGPointMake(self.view.bounds.size.width / 2.0,
                                               self.view.bounds.size.height / 2.0);
-        return;
+    } else {
+        CGSize s = self.view.bounds.size;
+        CGFloat scale = MIN(s.width / PHONE_CANVAS_W, s.height / PHONE_CANVAS_H);
+        self.contentView.bounds = CGRectMake(0, 0, PHONE_CANVAS_W, PHONE_CANVAS_H);
+        self.contentView.center = CGPointMake(s.width / 2.0, s.height / 2.0);
+        self.contentView.transform = CGAffineTransformMakeScale(scale, scale);
     }
-
-    CGSize s = self.view.bounds.size;
-    CGFloat scale = MIN(s.width / PHONE_CANVAS_W, s.height / PHONE_CANVAS_H);
-    self.contentView.bounds = CGRectMake(0, 0, PHONE_CANVAS_W, PHONE_CANVAS_H);
-    self.contentView.center = CGPointMake(s.width / 2.0, s.height / 2.0);
-    self.contentView.transform = CGAffineTransformMakeScale(scale, scale);
+    NSUserDefaults *d=[NSUserDefaults standardUserDefaults];
+    NSInteger side=[d objectForKey:PHONE_ISLAND_KEY] ? [d integerForKey:PHONE_ISLAND_KEY] : 2;
+    UIEdgeInsets safe=self.view.safeAreaInsets;
+    CGSize bounds=self.view.bounds.size;
+    SCDisplayRect area=sc_phone_area(bounds.width,bounds.height,safe.top,safe.left,safe.bottom,safe.right,(int)side);
+    if (UI_USER_INTERFACE_IDIOM()==UIUserInterfaceIdiomPhone && bounds.width>bounds.height) {
+        SCDisplaySize phone=sc_display_fit(area.width*self.view.window.screen.scale,area.height*self.view.window.screen.scale);
+        if (phone.width) {
+            uint32_t packed=((uint32_t)phone.width<<16)|phone.height;
+            if (__atomic_exchange_n(&displayPhoneSize,packed,__ATOMIC_RELAXED)!=packed) {
+                uint8_t bytes[]={phone.width&255,phone.width>>8,phone.height&255,phone.height>>8};
+                send_ipc_payload(MSG_PHONE_DISPLAY,bytes,sizeof(bytes));
+            }
+        }
+    }
+    self.videoView.frame=self.fullscreenMode ? CGRectMake(area.x,area.y,area.width,area.height) : self.contentView.bounds;
+    ((AVSampleBufferDisplayLayer *)self.videoView.layer).videoGravity=[d boolForKey:PHONE_FILL_KEY]
+        ? AVLayerVideoGravityResizeAspectFill : AVLayerVideoGravityResizeAspect;
 }
+- (void)viewSafeAreaInsetsDidChange { [super viewSafeAreaInsetsDidChange]; [self.view setNeedsLayout]; }
 
 - (BOOL)prefersStatusBarHidden { return YES; }
 - (UIInterfaceOrientationMask)supportedInterfaceOrientations {
@@ -2960,10 +2987,9 @@ static UIImage *showcase_star_image(CGFloat side);
     CGSize vs = self.videoView.bounds.size;
     float vw = vs.width, vh = vs.height;
     float cw = g_carplay_w, ch = g_carplay_h;
-    float va = cw / ch, vva = vw / vh;
-    float rw, rh, rx, ry;
-    if (va > vva) { rw = vw; rh = vw / va; rx = 0; ry = (vh - rh) / 2.0f; }
-    else          { rh = vh; rw = vh * va; rx = (vw - rw) / 2.0f; ry = 0; }
+    BOOL fill=[[NSUserDefaults standardUserDefaults] boolForKey:PHONE_FILL_KEY];
+    float scale=fill ? MAX(vw/cw,vh/ch) : MIN(vw/cw,vh/ch);
+    float rw=cw*scale, rh=ch*scale, rx=(vw-rw)/2, ry=(vh-rh)/2;
     float nx = (pt.x - rx) / rw, ny = (pt.y - ry) / rh;
     if (nx < 0 || nx > 1 || ny < 0 || ny > 1) return NO;
     *outX = (uint16_t)(nx * cw);
@@ -3268,6 +3294,11 @@ typedef NS_ENUM(NSInteger, ConnectStep) {
 /* The iPhone ended a running session; start again and wait for it, as a car
  * head unit does. The Stop button never sets this. */
 @property (nonatomic, assign) BOOL restartAfterStop;
+@property (nonatomic, assign) BOOL restartForDisplay;
+@property (nonatomic, assign) BOOL preserveHotspotOwnership;
+@property (nonatomic, assign) uint16_t requestedDisplayWidth, requestedDisplayHeight;
+@property (nonatomic, assign) uint64_t ipcGeneration;
+- (void)applyBrowserDisplayWidth:(uint16_t)width height:(uint16_t)height;
 
 /* Lifecycle */
 @property (nonatomic, assign) UIBackgroundTaskIdentifier bgTask;
@@ -4270,6 +4301,9 @@ static pid_t reusable_baa_broker(void) {
 }
 
 - (void)startFlow {
+    [self startFlowKeepingHotspotOwnership:NO];
+}
+- (void)startFlowKeepingHotspotOwnership:(BOOL)preserve {
     ip_log("startFlow: car='%s' ssid='%s'",
            [self.cars.selected.name UTF8String],
            [self.cars.apSSID UTF8String]);
@@ -4282,7 +4316,8 @@ static pid_t reusable_baa_broker(void) {
     if ([[NSUserDefaults standardUserDefaults] boolForKey:DEDICATED_RADIO_KEY]) {
         dispatch_async(self.bgQueue, ^{ showcase_hold_other_wifi(); });
     }
-    [[NSUserDefaults standardUserDefaults] setBool:NO forKey:HOTSPOT_OWNED_KEY];
+    self.preserveHotspotOwnership=preserve;
+    if (!preserve) [[NSUserDefaults standardUserDefaults] setBool:NO forKey:HOTSPOT_OWNED_KEY];
     self.hotspotManual = NO;
     self.hotspotAttempt = 0;
     [self.apPollTimer invalidate];
@@ -4308,8 +4343,9 @@ static pid_t reusable_baa_broker(void) {
         }
         if (attempt == 0) {
             /* Turn the hotspot off at stop only if Showcase turned it on. */
-            [[NSUserDefaults standardUserDefaults] setBool:(state != MIS_STATE_ON)
-                                                    forKey:HOTSPOT_OWNED_KEY];
+            if (!self.preserveHotspotOwnership)
+                [[NSUserDefaults standardUserDefaults] setBool:(state != MIS_STATE_ON) forKey:HOTSPOT_OWNED_KEY];
+            self.preserveHotspotOwnership=NO;
         }
         if (state == MIS_STATE_ON && !is_ap_up()) {
             /* On but not advertising: start it fresh. */
@@ -4724,6 +4760,11 @@ static pid_t reusable_baa_broker(void) {
         preferred_carplay_display_profile();
     uint16_t displayWidth = display.width;
     uint16_t displayHeight = display.height;
+    self.requestedDisplayWidth=displayWidth; self.requestedDisplayHeight=displayHeight;
+    SCDisplaySize phone=phone_display_size();
+    char phoneWidthBuf[16],phoneHeightBuf[16];
+    snprintf(phoneWidthBuf,sizeof(phoneWidthBuf),"%u",phone.width);
+    snprintf(phoneHeightBuf,sizeof(phoneHeightBuf),"%u",phone.height);
     /*
      * The TCP receive window bounds how much screen data the iPhone may have
      * in flight, and so how large a burst reaches this radio at once.
@@ -4772,6 +4813,8 @@ static pid_t reusable_baa_broker(void) {
         (char*)"--name", nameBuf,
         (char*)"--width", widthBuf,
         (char*)"--height", heightBuf,
+        (char*)"--phone-width", phoneWidthBuf,
+        (char*)"--phone-height", phoneHeightBuf,
         (char*)"--fps", fpsBuf,
         (char*)"--screen-rcvbuf", receiveBufferBuf,
         (char*)"--audio", (char*)(receiverAudio && !browserOutput ? "receiver" : "sender"),
@@ -4801,6 +4844,12 @@ static pid_t reusable_baa_broker(void) {
     } else {
         ip_log("[HANDOFF] Existing paired session resumed during startup");
     }
+    /* A browser may submit its viewport while the helper-alive check runs.
+     * Apply that saved request after setup, rather than losing it in PreparingNet. */
+    if (browserOutput) dispatch_async(dispatch_get_main_queue(), ^{
+        CarPlayDisplayProfile latest=preferred_carplay_display_profile();
+        [self applyBrowserDisplayWidth:latest.width height:latest.height];
+    });
 }
 
 - (void)completeBluetoothHandoff {
@@ -4842,9 +4891,17 @@ static pid_t reusable_baa_broker(void) {
     });
 }
 
+- (void)applyBrowserDisplayWidth:(uint16_t)width height:(uint16_t)height {
+    if ((self.state!=StateActive && self.state!=StateAwaitingPhone) ||
+        (self.requestedDisplayWidth==width && self.requestedDisplayHeight==height)) return;
+    ip_log("[DISPLAY] renegotiating CarPlay %ux%u -> %ux%u; preserving hotspot",self.requestedDisplayWidth,self.requestedDisplayHeight,width,height);
+    self.restartAfterStop=YES; self.restartForDisplay=YES; [self stopFlow];
+}
 - (void)stopFlow {
     BOOL restart = self.restartAfterStop;
+    BOOL preserveHotspot=restart && self.restartForDisplay;
     self.restartAfterStop = NO;
+    self.restartForDisplay=NO;
     [self endAWDLSuppression];
     [self stopNetworkDumpCaptureWithReason:@"user cancelled / stopping flow"];
     [self endBackgroundTask];
@@ -4853,7 +4910,9 @@ static pid_t reusable_baa_broker(void) {
     [self.discoveryTimer invalidate]; self.discoveryTimer = nil;
     [self transitionTo:StateStopping];
     dispatch_async(self.bgQueue, ^{
-        if (self.clientFd >= 0) { close(self.clientFd); self.clientFd = -1; }
+        self.ipcGeneration++;
+        /* The reader owns close(); shutdown wakes it without reusing its fd. */
+        if (self.clientFd >= 0) { shutdown(self.clientFd,SHUT_RDWR); self.clientFd = -1; }
         if (self.listenFd >= 0) { close(self.listenFd); self.listenFd = -1; }
         unlink(SOCK_PATH);
         g_touch_fd = -1;
@@ -4877,13 +4936,13 @@ static pid_t reusable_baa_broker(void) {
         } else {
             ip_log("WARNING: launchctl not found while restoring bluetoothd");
         }
-        if ([[NSUserDefaults standardUserDefaults] boolForKey:HOTSPOT_OWNED_KEY]) {
+        if (!preserveHotspot && [[NSUserDefaults standardUserDefaults] boolForKey:HOTSPOT_OWNED_KEY]) {
             showcase_set_hotspot_discovery(NO);
             showcase_set_hotspot(NO);
             [[NSUserDefaults standardUserDefaults] removeObjectForKey:HOTSPOT_OWNED_KEY];
             ip_log("[HOTSPOT] turned off the hotspot Showcase started");
         }
-        showcase_release_other_wifi("CarPlay stopped");
+        if (!preserveHotspot) showcase_release_other_wifi("CarPlay stopped");
 
         dispatch_async(dispatch_get_main_queue(), ^{
             AVSampleBufferDisplayLayer *layer = (AVSampleBufferDisplayLayer *)self.videoView.layer;
@@ -4894,7 +4953,7 @@ static pid_t reusable_baa_broker(void) {
         dispatch_async(dispatch_get_main_queue(), ^{
             [self presentPendingBluetoothCompatibilityError];
             if (restart && self.state == StateIdle && self.baaReady &&
-                !self.vc.presentedViewController) [self startFlow];
+                (preserveHotspot || !self.vc.presentedViewController)) [self startFlowKeepingHotspotOwnership:preserveHotspot];
         });
     });
 }
@@ -5586,15 +5645,17 @@ static NSString *hotspot_name(void) {
     chmod(SOCK_PATH, 0777);
     listen(fd, 1);
     self.listenFd = fd;
+    uint64_t generation=++self.ipcGeneration;
     ip_log("IPC listening on %s", SOCK_PATH);
-    dispatch_async(dispatch_get_global_queue(0, 0), ^{ [self ipcAcceptLoop]; });
+    dispatch_async(dispatch_get_global_queue(0, 0), ^{ [self ipcAcceptLoop:fd generation:generation]; });
     return YES;
 }
 
-- (void)ipcAcceptLoop {
-    while (self.listenFd >= 0) {
-        int c = accept(self.listenFd, NULL, NULL);
+- (void)ipcAcceptLoop:(int)listener generation:(uint64_t)generation {
+    while (self.ipcGeneration==generation && self.listenFd==listener) {
+        int c = accept(listener, NULL, NULL);
         if (c < 0) { if (errno == EINTR) continue; break; }
+        if (self.ipcGeneration!=generation) { close(c); break; }
         int noSigPipe = 1;
         setsockopt(c, SOL_SOCKET, SO_NOSIGPIPE,
                    &noSigPipe, sizeof(noSigPipe));
@@ -5607,22 +5668,27 @@ static NSString *hotspot_name(void) {
         if ([[NSUserDefaults standardUserDefaults] boolForKey:BROWSER_OUTPUT_KEY]) {
             dispatch_async(dispatch_get_main_queue(), ^{
                 send_app_visibility([UIApplication sharedApplication].applicationState == UIApplicationStateActive ? 1 : 0);
+                SCDisplaySize phone=phone_display_size();
+                uint8_t bytes[]={phone.width&255,phone.width>>8,phone.height&255,phone.height>>8};
+                send_ipc_payload(MSG_PHONE_DISPLAY,bytes,sizeof(bytes));
             });
         }
         [self ipcHandleConnection:c];
+        if (self.ipcGeneration!=generation) { close(c); break; }
         g_touch_fd = -1;
         __sync_add_and_fetch(&g_touch_epoch, 1);
         close(c);
         self.clientFd = -1;
         ip_log("services disconnected");
         dispatch_async(dispatch_get_main_queue(), ^{
-            [self endAWDLSuppression];
+            if (self.ipcGeneration==generation) [self endAWDLSuppression];
         });
         /* CarPlay services exits when the iPhone ends the session or leaves
          * Wi-Fi, and when it fails while connecting. */
         if (self.state != StateIdle && self.state != StateStopping) {
             BOOL wasActive = self.state == StateActive;
             dispatch_async(dispatch_get_main_queue(), ^{
+                if (self.ipcGeneration!=generation) return;
                 if (wasActive) {
                     ip_log("[SESSION] iPhone ended the session; waiting for it again");
                     self.restartAfterStop = YES;
@@ -6070,6 +6136,14 @@ static bool read_exact(int fd, uint8_t *buf, size_t len) {
                 }
             }
             free(payload);
+        } else if (type == MSG_DISPLAY_REQUEST) {
+            if (len==4) {
+                uint16_t w=payload[0]|(payload[1]<<8), h=payload[2]|(payload[3]<<8);
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    if (self.clientFd==fd) [self applyBrowserDisplayWidth:w height:h];
+                });
+            }
+            free(payload);
         } else if (type == MSG_BT_HANDOFF) {
             ip_log("[HANDOFF] services requested app-owned Bluetooth teardown");
             [self completeBluetoothHandoff];
@@ -6504,6 +6578,7 @@ static BOOL g_settings_hardware_loading = NO;
     if ([page isEqualToString:@"sound"]) return L(@"Sound");
     if ([page isEqualToString:@"display"]) return L(@"Display");
     if ([page isEqualToString:@"resolution"]) return L(@"Resolution");
+    if ([page isEqualToString:@"browser-resolution"]) return @"Output Aspect / 输出比例";
     if ([page isEqualToString:@"language"]) return L(@"Language");
     if ([page isEqualToString:@"logs"]) return L(@"Troubleshooting");
     if ([page isEqualToString:@"usage"]) return L(@"Anonymous Usage");
@@ -6695,6 +6770,7 @@ static BOOL g_settings_hardware_loading = NO;
     else if ([page isEqualToString:@"sound"]) [self buildSound:b];
     else if ([page isEqualToString:@"display"]) [self buildDisplay:b];
     else if ([page isEqualToString:@"resolution"]) [self buildResolution:b];
+    else if ([page isEqualToString:@"browser-resolution"]) [self buildBrowserResolution:b];
     else if ([page isEqualToString:@"language"]) [self buildLanguage:b];
     else if ([page isEqualToString:@"logs"]) [self buildLogs:b];
     else if ([page isEqualToString:@"usage"]) [self buildUsage:b];
@@ -6841,6 +6917,15 @@ static BOOL g_settings_hardware_loading = NO;
     return row;
 }
 
+- (UIView *)phoneSegmentRow:(NSString *)title items:(NSArray<NSString *> *)items selected:(NSInteger)selected
+                     width:(CGFloat)w changed:(void (^)(NSInteger index))changed {
+    UIView *row=[[UIView alloc] initWithFrame:CGRectMake(0,0,w,84)];
+    [row addSubview:[self rowTitle:title frame:CGRectMake(16,4,w-32,30)]];
+    SettingsSegments *segments=[[SettingsSegments alloc] initWithItems:items];
+    segments.selectedSegmentIndex=MAX(0,MIN(selected,(NSInteger)items.count-1));
+    segments.tintColor=[UIColor whiteColor];segments.changed=changed;
+    segments.frame=CGRectMake(16,42,w-32,30);[row addSubview:segments];return row;
+}
 - (UIView *)segmentRow:(NSString *)title items:(NSArray<NSString *> *)items selected:(NSInteger)selected
                  width:(CGFloat)w enabled:(BOOL)enabled changed:(void (^)(NSInteger index))changed {
     UIView *row = [[UIView alloc] initWithFrame:CGRectMake(0, 0, w, 52)];
@@ -7372,19 +7457,31 @@ static BOOL g_settings_hardware_loading = NO;
             showcase_browser_addresses()];
         [b labelText:details font:[UIFont monospacedDigitSystemFontOfSize:14 weight:UIFontWeightRegular]
             alpha:0.8 inset:16 gapAfter:16 color:nil];
-        NSInteger height = [d integerForKey:BROWSER_QUALITY_KEY];
-        NSInteger quality = height == 720 ? 0 : height == 900 ? 1 : 2;
+        NSDictionary *output=showcase_display_configuration();
+        NSString *mode=output[@"mode"] ?: @"auto";
+        NSString *name=[mode isEqual:@"auto"] ? @"Auto · 车机浏览器" : [mode isEqual:@"phone"] ? @"Phone · 手机屏幕" : mode;
         [b card:^(SettingsCard *card) {
-            [card addRow:[self segmentRow:@"Browser / 网页"
-                items:@[@"720p", @"900p", @"1080p"] selected:quality width:w enabled:YES
-                changed:^(NSInteger index) {
-                    [d setInteger:(index == 0 ? 720 : index == 1 ? 900 : 1080) forKey:BROWSER_QUALITY_KEY];
-                    [d synchronize];
-                    dispatch_async(dispatch_get_main_queue(), ^{ [weakSelf render]; });
-                }] height:52];
+            [card addRow:[self navRow:@"Output Aspect / 输出比例" value:name width:w selected:NO action:^{
+                [weakSelf push:@"browser-resolution"];
+            }] height:52];
         }];
-        [b message:@"1080p is the default; choose 900p or 720p for a slower hotspot. 30 fps. Stop and restart CarPlay after changes. / 默认 1080p，热点较慢可选 900p 或 720p。更改后停止并重新启动 CarPlay。"
-            color:[UIColor colorWithWhite:1 alpha:0.6]];
+        [b message:@"默认自动适配浏览器可用区域。也可选择手机比例或固定分辨率；改变源分辨率会重连 CarPlay，热点保持开启。两端仍共用一路源画面。" color:[UIColor colorWithWhite:1 alpha:0.6]];
+    }
+
+    if (UI_USER_INTERFACE_IDIOM()==UIUserInterfaceIdiomPhone) {
+        [b card:^(SettingsCard *card) {
+            [card addRow:[self phoneSegmentRow:@"Phone View / 手机显示" items:@[@"完整显示",@"铺满（裁切）"]
+                selected:[d boolForKey:PHONE_FILL_KEY] ? 1 : 0 width:w changed:^(NSInteger index) {
+                    setter(PHONE_FILL_KEY,index==1); [weakSelf.appDelegate.vc.view setNeedsLayout];
+                }] height:84];
+            NSInteger side=[d objectForKey:PHONE_ISLAND_KEY] ? [d integerForKey:PHONE_ISLAND_KEY] : 2;
+            [card addRow:[self phoneSegmentRow:@"Dynamic Island / 灵动岛避让" items:@[@"关闭",@"系统",@"右侧",@"左侧"]
+                selected:side width:w changed:^(NSInteger index) {
+                    [d setInteger:index forKey:PHONE_ISLAND_KEY]; [d synchronize];
+                    [weakSelf.appDelegate.vc.view setNeedsLayout];
+                }] height:84];
+        }];
+        [b message:@"手机默认完整显示、不裁切、不拉伸。按实际屏幕与安全区域布局，右侧避让只预留灵动岛一侧。手机缩放和避让立即生效，不改变车机输出；选择手机输出比例后，以当前手机可用区域重新协商。" color:[UIColor colorWithWhite:1 alpha:0.6]];
     }
 
     [b card:^(SettingsCard *card) {
@@ -7489,6 +7586,30 @@ static BOOL g_settings_hardware_loading = NO;
                 GITHUB_URL @"/blob/main/telemetry/worker.js"] options:@{} completionHandler:nil];
         }] height:52];
     }];
+}
+
+- (void)buildBrowserResolution:(SettingsPageBuilder *)b {
+    CGFloat w=b.width;
+    __weak SettingsViewController *weakSelf=self;
+    NSDictionary *saved=showcase_display_configuration();
+    NSString *mode=saved[@"mode"] ?: @"auto";
+    NSArray *modes=@[@"auto",@"phone",@"1920x1080",@"1600x900",@"1280x720",@"1600x1000",@"1440x1080",@"1920x960",@"1920x720"];
+    [b card:^(SettingsCard *card) {
+        for (NSString *option in modes) {
+            NSString *title=[option isEqual:@"auto"] ? @"Auto · 适配车机浏览器（默认）" : [option isEqual:@"phone"] ? @"Phone · 适配手机屏幕" : option;
+            [card addRow:[self choiceRow:title value:@"" checked:[mode isEqual:option] width:w action:^{
+                CarPlayDisplayProfile current=preferred_carplay_display_profile();
+                SCDisplaySize size=[option isEqual:@"phone"] ? phone_display_size() : sc_display_preset(option.UTF8String);
+                if ([option isEqual:@"auto"]) size=(SCDisplaySize){current.width,current.height};
+                NSDictionary *config=@{ @"mode":option,@"width":@(size.width),@"height":@(size.height) };
+                if (!showcase_save_display_configuration(config)) return;
+                uint8_t changed=1; send_ipc_payload(MSG_DISPLAY_PREF,&changed,1);
+                [weakSelf pop];
+                [weakSelf.appDelegate applyBrowserDisplayWidth:size.width height:size.height];
+            }] height:52];
+        }
+    }];
+    [b message:@"自动模式由网页上报当前可用区域，手机模式按本机横屏与灵动岛避让区域计算。固定尺寸保持所选比例。源画面只有一路，另一端默认完整显示；改变源尺寸会自动重连 CarPlay。" color:[UIColor colorWithWhite:1 alpha:0.6]];
 }
 
 - (void)buildResolution:(SettingsPageBuilder *)b {

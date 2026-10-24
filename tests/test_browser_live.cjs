@@ -112,7 +112,9 @@ const wire=(data,opcode=2)=>{
     await page.evaluate(()=>window.dispatchEvent(new Event('blur')));await page.mouse.up();await until(()=>touches.slice(blurStart).some(m=>m.type==='release'),'blur release must reach server');
     flowing=false;const stable=connections;await page.waitForTimeout(4000);assert.equal(connections,stable,'static screen must not churn connections');flowing=true;
     await page.click('#reconnect');await ready('jpeg');assert.equal(await page.locator('#poster').isVisible(),false);
-    await page.click('#fit');assert.equal(await page.locator('#display canvas').evaluate(c=>getComputedStyle(c).objectFit),'contain');
+    assert.equal(await page.locator('#display canvas').evaluate(c=>getComputedStyle(c).objectFit),'contain');
+    await page.click('#fit');assert.equal(await page.locator('#display canvas').evaluate(c=>getComputedStyle(c).objectFit),'cover');
+    await page.click('#fit');
     await page.selectOption('#renderer','webrtc');await page.waitForFunction(()=>showcaseDiagnostics().fallbackReason?.includes('fixture UDP unavailable') && showcaseDiagnostics().renderer==='jpeg');await ready('jpeg');
     sourceProfile=100;
     await page.waitForFunction(()=>document.querySelector('#renderer option[value="software"]').disabled && document.querySelector('#renderer option[value="software"]').textContent.includes('100'));

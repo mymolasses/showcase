@@ -108,7 +108,7 @@ process.env.SHOWCASE_RTC_DEBUG='1'; // Synthetic local peers only; no phone data
     await page.waitForTimeout(1200);
     await page.click('#menu');
     if(profile!=='baseline') assert.equal(await page.locator('#renderer option[value="software"]').evaluate(o=>o.disabled),true);
-    await page.click('#fit'); // verify original aspect-ratio mapping too
+    assert.equal(await page.locator('#display canvas').evaluate(c=>getComputedStyle(c).objectFit),'contain');
     const rect = await page.locator('#surface').boundingBox();
     const before = output.match(/TOUCH 0 /g)?.length || 0;
     await page.mouse.click(rect.x + rect.width / 2, rect.y + 3); // letterbox

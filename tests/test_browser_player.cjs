@@ -1,5 +1,5 @@
 const assert=require('node:assert/strict');
-const {mapPoint,nals,parameterSets,annexB,parsePacket}=require('../web/protocol.js');
+const {mapPoint,nals,parameterSets,annexB,parsePacket,displaySize}=require('../web/protocol.js');
 const config=Buffer.from('0142001effe100046742001e01000268ce','hex');
 assert.equal(parameterSets(config).length,2);
 assert.equal(Buffer.from(annexB(parameterSets(config))).toString('hex'),'000000016742001e0000000168ce');
@@ -14,5 +14,9 @@ const rect={left:0,top:0,width:1000,height:1000};
 assert.equal(mapPoint(rect,1920,1080,500,10,false),null);
 assert.deepEqual(mapPoint(rect,1920,1080,500,500,false),{x:960,y:540});
 assert.deepEqual(mapPoint(rect,1920,1080,0,0,true),{x:0,y:0});
-assert.deepEqual(mapPoint(rect,1920,1080,1000,1000,true,true),{x:1920,y:1080});
+assert.deepEqual(mapPoint(rect,1920,1080,1000,1000,true,true),{x:1500,y:1080});
+assert.deepEqual(mapPoint(rect,1920,1080,0,0,true,true),{x:420,y:0});
+assert.deepEqual(displaySize(2796,1290),{width:1920,height:886});
+assert.deepEqual(displaySize(1600,1000),{width:1600,height:1000});
+assert.equal(displaySize(Infinity,720),null);assert.equal(displaySize(100,720),null);
 console.log('PASS: bounded AVC/config parsing, Annex-B conversion, media framing and fit/fill touch mapping');

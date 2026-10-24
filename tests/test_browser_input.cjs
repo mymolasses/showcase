@@ -54,7 +54,7 @@ function fixture(connectReady = 1) {
   assert.equal(drag.initial.messages.filter(m=>m.phase===1).length,1,'a move burst should coalesce');
   drag.pointer('pointermove',900,400);drag.pointer('pointerup',950,450);drag.frame();
   assert.equal(drag.pendingFrames(),0);
-  const up=drag.initial.messages.find(m=>m.phase===2);assert.equal(up.x,608);assert.equal(up.y,324);
+  const up=drag.initial.messages.find(m=>m.phase===2);assert.equal(up.x,640);assert.equal(up.y,324);
   assert.equal(drag.captured.size,0,'pointer capture must be released after up');
   assert(!drag.initial.messages.slice(drag.initial.messages.indexOf(up)+1).some(m=>m.phase===1),'no late move after up');
   const quick=fixture();quick.pointer('pointerdown',100,100);quick.pointer('pointermove',200,100);quick.pointer('pointerup',300,100);quick.frame();

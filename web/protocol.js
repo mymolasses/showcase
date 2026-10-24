@@ -3,9 +3,9 @@
   'use strict';
   function mapPoint(rect, width, height, x, y, clamp, fill = false) {
     if (!(rect.width > 0 && rect.height > 0 && width > 0 && height > 0)) return null;
-    const scale = Math.min(rect.width / width, rect.height / height);
-    let px = fill ? (x - rect.left) * width / rect.width : (x - rect.left - (rect.width - width * scale) / 2) / scale;
-    let py = fill ? (y - rect.top) * height / rect.height : (y - rect.top - (rect.height - height * scale) / 2) / scale;
+    const scale = (fill ? Math.max : Math.min)(rect.width / width, rect.height / height);
+    let px = (x - rect.left - (rect.width - width * scale) / 2) / scale;
+    let py = (y - rect.top - (rect.height - height * scale) / 2) / scale;
     if (!clamp && (px < 0 || px > width || py < 0 || py > height)) return null;
     return {x: Math.round(Math.max(0, Math.min(width, px))), y: Math.round(Math.max(0, Math.min(height, py)))};
   }
@@ -66,7 +66,12 @@
     }
     throw Error('Invalid browser media packet');
   }
-  const api = {mapPoint,nals,parameterSets,annexB,parsePacket};
+  function displaySize(width,height) {
+    if(!Number.isFinite(width)||!Number.isFinite(height)||width<240||height<240||width>16384||height>16384||width/height<.4||width/height>4)return null;
+    const scale=Math.min(1,1920/width,1080/height);
+    return {width:2*Math.round(width*scale/2),height:2*Math.round(height*scale/2)};
+  }
+  const api = {mapPoint,nals,parameterSets,annexB,parsePacket,displaySize};
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.ShowcaseProtocol = api;
 })(typeof self !== 'undefined' ? self : globalThis);

@@ -1,4 +1,6 @@
-# Showcase+ 1.3.4：当前诊断
+# Showcase+ 1.4.0：当前诊断
+
+新增 `outputMode`、`viewport`、`outputTarget`、`displayFit`。`receiver.displayRequest` 是已保存的输出目标，`displayNegotiated` 是本轮向发送机请求的尺寸，顶层 `resolution` / 接收机 `width,height` 是实际收到的视频尺寸；三者不能混为一谈。`receiver.phoneDisplay` 是手机当前横屏可用区域对应的受限像素尺寸。切换目标会重新连接 CarPlay，旧网页失败记录不代表本轮协商失败。
 
 当前显示方式见 [BROWSER_MODES.md](BROWSER_MODES.md)。`renderer` 是实际后端，`fallbackReason` 说明回退原因；`capabilities` 记录浏览器安全上下文和解码 API，`receiver` 是独立的手机端统计。
 

@@ -98,7 +98,8 @@ def main():
             reservation.bind(('127.0.0.1', 0))
             port = reservation.getsockname()[1]
         process = subprocess.Popen([str(work / 'bridge'), str(port), str(work / 'fixture.bin'), '320x180'],
-                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
+                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1,
+                                   env={**os.environ,'SHOWCASE_TEST_DISPLAY':'1'})
         events = queue.Queue()
         def reader():
             for line in process.stdout:
@@ -221,7 +222,23 @@ def main():
             command('b'); wait_event('TOUCH 3'); assert status()['inputOwner'] == 'none'
             command('f'); command('l'); wait_event('TOUCH 0'); command('a'); wait_event('TOUCH 3')
             assert status()['inputOwner'] == 'none'
-            print('PASS: passwordless HTTP/WS, duplicate AVC config, origin/host, one controller, AVC time, touch, batched drag, local/browser ownership, deadman, foreground reset, stale generation')
+            display_control=WS(port,'/control'); sockets.append(display_control)
+            display_control.send(dict(type='display',mode='auto',width=1600,height=1000))
+            assert wait_event('DISPLAY')=='DISPLAY auto 1600 1000 1600 1000'
+            deadline=time.monotonic()+2
+            while status()['displayRequest'].get('width')!=1600 and time.monotonic()<deadline: time.sleep(.03)
+            assert status()['displayRequest']['mode']=='auto'
+            display_control.send(dict(type='display',mode='phone'))
+            time.sleep(.15)
+            assert status()['displayRequest']['mode']=='auto', 'resize churn must be rate limited'
+            time.sleep(8)
+            display_control.send(dict(type='display',mode='phone'))
+            assert wait_event('DISPLAY')=='DISPLAY phone 1920 886 0 0'
+            display_control.close(); sockets.remove(display_control)
+            for bad in [dict(type='display',mode='auto',width=True,height=720),dict(type='display',mode='9999x100'),dict(type='display',mode='auto',width=0,height=720)]:
+                invalid=WS(port,'/control');invalid.send(bad)
+                assert invalid.sock.recv(1)==b'';invalid.close()
+            print('PASS: passwordless HTTP/WS, touch/ownership, foreground/stale generations, real display-control callback, geometry validation and resize rate limit')
         finally:
             for ws in sockets:
                 ws.close()

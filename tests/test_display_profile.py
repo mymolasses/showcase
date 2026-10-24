@@ -13,6 +13,7 @@ harness = r'''
 #include <float.h>
 #include <assert.h>
 #include <stdio.h>
+#include "display_geometry.h"
 #define MIN(a,b) ((a)<(b)?(a):(b))
 #define MAX(a,b) ((a)>(b)?(a):(b))
 ''' + selector + r'''
@@ -75,6 +76,24 @@ static void check(double L, double S, uint64_t memory, unsigned cores, uint16_t 
 }
 
 int main(void) {
+    SCDisplaySize phone=sc_display_fit(2796,1290);
+    assert(phone.width==1920 && phone.height==886);
+    SCDisplayRect right=sc_phone_area(932,430,0,59,21,59,2);
+    assert(right.x==0 && right.y==0 && right.width==873 && right.height==409);
+    SCDisplaySize usable=sc_display_fit(right.width*3,right.height*3);
+    assert(usable.width==1920 && usable.height==900);
+    SCDisplayRect left=sc_phone_area(932,430,0,59,21,59,3);
+    assert(left.x==59 && left.width==right.width);
+    SCDisplayRect full=sc_phone_area(932,430,0,59,21,59,0);
+    assert(full.x==0 && full.width==932 && full.height==430);
+    for (int width=640;width<=6000;width+=137) for (int height=360;height<=4000;height+=91) {
+        SCDisplaySize size=sc_display_fit(width,height);
+        if (!size.width) { assert((double)width/height<.4 || (double)width/height>4); continue; }
+        assert(size.width<=1920 && size.height<=1080 && size.width%2==0 && size.height%2==0);
+        assert(fabs((double)size.width/size.height-(double)width/height)/((double)width/height)<.006);
+    }
+    assert(!sc_display_fit(INFINITY,720).width && !sc_display_fit(100,720).width);
+    assert(sc_display_preset("1600x1000").height==1000 && !sc_display_preset("9999x720").width);
     const double displays[][2] = {{2048,1536}, {2732,2048}, {2388,1668}, {2360,1640},
                                   {1920,1080}, {1334,750}, {2436,1125}, {1136,640}, {1024,768}};
     unsigned profiles = 0;
@@ -99,5 +118,5 @@ int main(void) {
 with tempfile.TemporaryDirectory() as directory:
     path = Path(directory)
     (path / 'check.c').write_text(harness)
-    subprocess.run(['clang', '-Wall', '-Wextra', '-Werror', str(path / 'check.c'), '-lm', '-o', str(path / 'check')], check=True)
+    subprocess.run(['clang', '-Wall', '-Wextra', '-Werror', '-I', str(Path(__file__).resolve().parents[1]/'source'), str(path / 'check.c'), '-lm', '-o', str(path / 'check')], check=True)
     subprocess.run([str(path / 'check')], check=True)

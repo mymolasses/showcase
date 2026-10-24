@@ -4,6 +4,7 @@
 #include <sys/stat.h>
 #include <ifaddrs.h>
 #include <arpa/inet.h>
+#include "display_geometry.h"
 
 #define BROWSER_OUTPUT_KEY @"browserOutputEnabled"
 #define BROWSER_QUALITY_KEY @"browserResolutionHeight"
@@ -14,6 +15,24 @@
 #define BROWSER_WEB_CONFIG @"/var/mobile/Library/Showcase/browser-web.json"
 #define BROWSER_WEB_IDENTITY @"/var/mobile/Library/Showcase/browser-server.p12"
 #define BROWSER_WEB_DOMAIN @"carplay.99-99-99-99.sslip.io"
+#define BROWSER_DISPLAY_CONFIG @"/var/mobile/Library/Showcase/browser-display.json"
+#define PHONE_ISLAND_KEY @"phoneIslandAvoidance"
+#define PHONE_FILL_KEY @"phoneFillDisplay"
+
+static NSDictionary *showcase_display_configuration(void) {
+    NSData *data=[NSData dataWithContentsOfFile:BROWSER_DISPLAY_CONFIG];
+    id config=data.length<=4096 ? [NSJSONSerialization JSONObjectWithData:data ?: [NSData data] options:0 error:NULL] : nil;
+    return [config isKindOfClass:NSDictionary.class] ? config : @{};
+}
+static BOOL showcase_save_display_configuration(NSDictionary *config) {
+    NSData *data=[NSJSONSerialization dataWithJSONObject:config options:0 error:NULL];
+    if (!data) return NO;
+    [[NSFileManager defaultManager] createDirectoryAtPath:BROWSER_DISPLAY_CONFIG.stringByDeletingLastPathComponent
+        withIntermediateDirectories:YES attributes:nil error:NULL];
+    BOOL saved=[data writeToFile:BROWSER_DISPLAY_CONFIG options:NSDataWritingAtomic error:NULL];
+    if (saved) chmod(BROWSER_DISPLAY_CONFIG.fileSystemRepresentation,0644);
+    return saved;
+}
 
 static BOOL showcase_web_domain_valid(NSString *domain) {
     if (![domain isKindOfClass:NSString.class] || domain.length > 253) return NO;

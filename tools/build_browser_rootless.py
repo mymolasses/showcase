@@ -179,7 +179,7 @@ def main():
     revision = run(['git', 'rev-parse', 'HEAD'], True).strip()
     source_paths = ['source/Showcase.m', 'source/carplay_services.m', 'source/browser_bridge.m',
                     'source/browser_jpeg.m','source/browser_jpeg.h','source/browser_rtc.m','source/browser_rtc.h',
-                    'source/browser_bridge.h', 'source/browser_settings.h', 'source/browser_assets.h',
+                    'source/browser_bridge.h', 'source/browser_settings.h', 'source/display_geometry.h', 'source/browser_assets.h',
                     'source/browser_network.c', 'source/browser_network.h', 'source/browser_probe.m',
                     'source/browser_web_tls.m', 'source/browser_web_tls.h',
                     'packaging/control-rootless/postinst', 'packaging/control-rootless/prerm',
