@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * Run the production bridge on macOS with synthetic/recorded AVC access units.
  * Fixture: BE32 avccLength, avcc, then repeated [BE32 length, AVCC frame].
- * stdin: b=background, f=foreground/new config, r=repeat same config, t=timestamp gap,
+ * stdin: b=background, f=foreground without new config, r=repeat same config, t=timestamp gap,
  * d=repeated timestamp, z=zero timestamp, n=normal timestamp,
  * s=static screen (no new frames), c=continue frames, q=quit.
  */
@@ -56,7 +56,6 @@ int main(int argc, char **argv) { @autoreleasepool {
             if (command[i] == 'r') showcase_browser_config(width, height, config.bytes, config.length);
             if (command[i] == 'f') {
                 active = true; showcase_browser_set_active(true);
-                showcase_browser_config(width, height, config.bytes, config.length);
                 sequence = 0;
             }
         }

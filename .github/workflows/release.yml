@@ -87,6 +87,7 @@ jobs:
           python3 tests/test_control_connect.py
           python3 tests/test_bluetooth_recovery.py
           python3 tests/test_bluetooth_startup.py
+          python3 tests/test_launch_recovery.py
           python3 tests/test_localization.py
           python3 tests/test_browser_packaging.py
           python3 tests/test_browser_bridge.py
@@ -99,6 +100,8 @@ jobs:
           node tests/test_browser_probe.cjs
           node tests/test_browser_e2e.cjs
           SHOWCASE_TEST_TLS=1 node tests/test_browser_e2e.cjs
+          SHOWCASE_TEST_AVC_PROFILE=main node tests/test_browser_e2e.cjs
+          SHOWCASE_TEST_AVC_PROFILE=high node tests/test_browser_e2e.cjs
           node tests/test_browser_web_tls.cjs
       - name: Build and verify Dopamine rootless deb
         shell: bash

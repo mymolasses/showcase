@@ -468,8 +468,26 @@ void showcase_browser_stop(void) {
 }
 void showcase_browser_set_active(bool value) {
     pthread_mutex_lock(&browserLock);
+    bool previous = active;
     active = value;
-    if (!value) invalidate_stream();
+    if (!value && previous) {
+        /* Visibility does not tear down the CarPlay screen connection. A
+         * resume often sends only an IDR, without another VideoConfig. */
+        uint16_t width = videoWidth, height = videoHeight;
+        invalidate_stream(); videoWidth = width; videoHeight = height;
+    }
+    if (value && !previous && !configuration && decoderConfiguration && videoWidth && videoHeight) {
+        uint8_t header[9] = {1}; put_be(header+1,generation,4);
+        put_be(header+5,videoWidth,2); put_be(header+7,videoHeight,2);
+        NSMutableData *payload = [NSMutableData dataWithBytes:header length:sizeof(header)];
+        [payload appendData:decoderConfiguration]; configuration = websocket_packet(payload,2);
+        for (SCBrowserClient *c in clients) if (c.role == 1) {
+            c.needsKey = true; enqueue(c,configuration);
+            if (c.transport == 1) { jpegGeneration=generation; showcase_jpeg_configure(generation,decoderConfiguration,publish_jpeg); }
+            if (c.transport == 3) showcase_rtc_start(generation,decoderConfiguration);
+        }
+        wantKey = true;
+    }
     pthread_mutex_unlock(&browserLock);
 }
 void showcase_browser_reset(void) {

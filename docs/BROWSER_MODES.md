@@ -1,4 +1,4 @@
-# Showcase+ 1.3.2 / 1009：浏览器显示方式
+# Showcase+ 1.3.3 / 1010：浏览器显示方式
 
 本版移除旧的 fMP4 / MSE 播放器，保留 CarPlay 接收、手机与网页触摸交接、免密码访问、热点兼容入口和手机蓝牙音频。H.264 编码本身仍用于部分新显示方式。
 
@@ -28,6 +28,6 @@
 
 ## 安装与验证边界
 
-停止 CarPlay，关闭网络探测，退出 Showcase，保持 Dopamine 越狱激活，用 Filza 覆盖安装新版 rootless deb。确认 **Showcase+ 1.3.2 / 1009**，重新开启 Browser Output、网络探测和 CarPlay。接收机保持前台，关闭其他观看页面，刷新原来的网页入口。
+停止 CarPlay，关闭网络探测，退出 Showcase，保持 Dopamine 越狱激活，用 Filza 覆盖安装新版 rootless deb。确认 **Showcase+ 1.3.3 / 1010**，重新开启 Browser Output、网络探测和 CarPlay。接收机保持前台，关闭其他观看页面，刷新原来的网页入口。
 
 自动测试覆盖协议、输入、重复回调、资源回收、真实 Chrome 多后端、原生 JPEG / WebRTC、HTTP / TLS 网关以及 iOS arm64 编译、签名与包来源验证。软件模拟和桌面测试不等于该型号车机已验证；本版不读取档位、不修改车辆系统，也不保证 D 档画面可用。此前已确认 P 档恢复、D 档冻结的观察记录保留在 PLAYBACK_REVIEW 和历史诊断中。请在停车后检查和导出数据。

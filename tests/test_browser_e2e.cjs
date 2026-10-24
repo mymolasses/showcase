@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * Optional macOS/Chrome integration: create synthetic AVC with WebCodecs, then
- * play it through the production bridge's MSE page and send real pointer input.
+ * play it through production JPEG/H.264 renderers and send real pointer input.
  * Requires playwright (NODE_PATH or local install) and Google Chrome.
  */
 const assert = require('node:assert/strict');
@@ -16,6 +16,10 @@ const root = path.resolve(__dirname, '..');
 const fixtureTLS = require('./browser_web_fixture.cjs');
 const useTLS = process.env.SHOWCASE_TEST_TLS === '1';
 const domain = 'carplay.showcase.test';
+const profile = process.env.SHOWCASE_TEST_AVC_PROFILE || 'baseline';
+const codecs = {baseline:'avc1.42002a',main:'avc1.4d002a',high:'avc1.64002a'};
+assert(codecs[profile], 'Unknown AVC test profile');
+const width = profile==='baseline' ? 1920 : 1600, height = profile==='baseline' ? 1080 : 900;
 process.env.SHOWCASE_RTC_DEBUG='1'; // Synthetic local peers only; no phone data.
 
 (async () => {
@@ -31,19 +35,19 @@ process.env.SHOWCASE_RTC_DEBUG='1'; // Synthetic local peers only; no phone data
     browser = await chromium.launch({executablePath: process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', headless: true, args: ['--no-proxy-server', ...(useTLS ? ['--host-resolver-rules=MAP '+domain+' 127.0.0.1', '--ignore-certificate-errors-spki-list='+certificate.spki] : [])]});
     const page = await browser.newPage({viewport: {width: 1280, height: 900}});
     await page.goto(`http://127.0.0.1:${server.address().port}`);
-    const encoded = await page.evaluate(async () => {
+    const encoded = await page.evaluate(async ({codec,width,height}) => {
       if (!window.VideoEncoder) throw Error('Chrome WebCodecs encoder unavailable');
       const frames = []; let description = null, failure = null;
       const encoder = new VideoEncoder({output(chunk, meta) {
         const bytes = new Uint8Array(chunk.byteLength); chunk.copyTo(bytes); frames.push([...bytes]);
         if (meta.decoderConfig?.description) description = [...new Uint8Array(meta.decoderConfig.description)];
       }, error(error) { failure = error.message; }});
-      encoder.configure({codec: 'avc1.42002a', width: 1920, height: 1080, framerate: 30,
+      encoder.configure({codec, width, height, framerate: 30,
         bitrate: 6000000, latencyMode: 'realtime', avc: {format: 'avc'}});
-      const canvas = document.createElement('canvas'); canvas.width = 1920; canvas.height = 1080;
+      const canvas = document.createElement('canvas'); canvas.width = width; canvas.height = height;
       const context = canvas.getContext('2d');
       for (let i = 0; i < 60; i++) {
-        context.fillStyle = '#13254b'; context.fillRect(0, 0, 1920, 1080);
+        context.fillStyle = '#13254b'; context.fillRect(0, 0, width, height);
         context.fillStyle = '#48cfae'; context.fillRect(i * 24, 300, 300, 480);
         context.fillStyle = '#e43a32'; context.fillRect(20,20,60,60);
         const frame = new VideoFrame(canvas, {timestamp: Math.round(i * 1e6 / 30), duration: 33333});
@@ -52,13 +56,18 @@ process.env.SHOWCASE_RTC_DEBUG='1'; // Synthetic local peers only; no phone data
       await encoder.flush(); encoder.close();
       if (failure || !description || !frames.length) throw Error(failure || 'No AVC output');
       return {description, frames};
-    });
+    },{codec:codecs[profile],width,height});
+    assert.equal(encoded.description[1],{baseline:66,main:77,high:100}[profile],'Encoder must produce the requested AVC profile');
     const record = bytes => { const header = Buffer.alloc(4); header.writeUInt32BE(bytes.length); return Buffer.concat([header, Buffer.from(bytes)]); };
     const fixture = path.join(work, 'avc.bin');
     fs.writeFileSync(fixture, Buffer.concat([record(encoded.description), ...encoded.frames.map(record)]));
+    execFileSync('clang',['-fobjc-arc','-Wno-deprecated-declarations',path.join(root,'tests/browser_jpeg_recovery.m'),
+      ...['Foundation','VideoToolbox','CoreMedia','CoreVideo','CoreGraphics','ImageIO','CoreImage'].flatMap(name=>['-framework',name]),
+      '-o',path.join(work,'jpeg-recovery')],{stdio:'inherit'});
+    execFileSync(path.join(work,'jpeg-recovery'),[fixture],{stdio:'inherit',timeout:25000});
     const port = server.address().port;
     await new Promise(resolve => server.close(resolve)); server = null;
-    helper = spawn(path.join(work, 'bridge'), [String(port), fixture, '1920x1080'], {stdio: ['pipe', 'pipe', 'pipe']});
+    helper = spawn(path.join(work, 'bridge'), [String(port), fixture, `${width}x${height}`], {stdio: ['pipe', 'pipe', 'pipe']});
     let output = '', stderr = '';
     helper.stdout.on('data', bytes => { output += bytes.toString(); });
     helper.stderr.on('data', bytes => { stderr += bytes.toString(); });
@@ -100,7 +109,7 @@ process.env.SHOWCASE_RTC_DEBUG='1'; // Synthetic local peers only; no phone data
     await page.mouse.down();
     await page.mouse.move(rect.x + rect.width * 0.6, rect.y + rect.height * 0.6, {steps: 8});
     await page.mouse.up();
-    await until(() => /TOUCH 0 960 540/.test(output) && /TOUCH 1 /.test(output) && /TOUCH 2 /.test(output), 'pointer -> production touch callback');
+    await until(() => output.includes(`TOUCH 0 ${width/2} ${height/2}`) && /TOUCH 1 /.test(output) && /TOUCH 2 /.test(output), 'pointer -> production touch callback');
     // A stationary long press survives the server's 750ms deadman because
     // the production page sends holds. Blur must then cancel it immediately.
     await page.mouse.move(rect.x + rect.width / 2, rect.y + rect.height / 2);
@@ -142,7 +151,7 @@ process.env.SHOWCASE_RTC_DEBUG='1'; // Synthetic local peers only; no phone data
     await page.waitForFunction(()=>showcaseDiagnostics().displayed && showcaseDiagnostics().drawnFrames>2,null,{timeout:20000});
     // Every offered backend must actually decode/render through production
     // native services; no synthetic server or permissive asset interception.
-    for(const mode of ['webcodecs','software','mjpeg','webrtc','jpeg']) {
+    for(const mode of (profile==='baseline' ? ['webcodecs','software','mjpeg','webrtc','jpeg'] : ['mjpeg','jpeg'])) {
       await page.selectOption('#renderer',mode);
       try {
         await page.waitForFunction(mode=>{const d=showcaseDiagnostics();return d.renderer===mode && d.displayed && (mode==='mjpeg'||d.drawnFrames>2);},mode,{timeout:25000});
@@ -161,7 +170,7 @@ process.env.SHOWCASE_RTC_DEBUG='1'; // Synthetic local peers only; no phone data
     helper.stdin.write('q'); await once(helper, 'exit');
     await page.waitForFunction(() => document.querySelector('#state').textContent.includes('重试'));
     assert.equal(await page.locator('#poster').isVisible(), true);
-    helper = spawn(path.join(work, 'bridge'), [String(port), fixture, '1920x1080'], {stdio: ['pipe', 'pipe', 'pipe']});
+    helper = spawn(path.join(work, 'bridge'), [String(port), fixture, `${width}x${height}`], {stdio: ['pipe', 'pipe', 'pipe']});
     helper.stdout.on('data', bytes => { output += bytes.toString(); });
     helper.stderr.on('data', bytes => { stderr += bytes.toString(); });
     await page.waitForFunction(()=>showcaseDiagnostics().displayed && showcaseDiagnostics().drawnFrames>2,null,{timeout:20000});
@@ -170,7 +179,7 @@ process.env.SHOWCASE_RTC_DEBUG='1'; // Synthetic local peers only; no phone data
     helper.stdin.write('f');
     await page.waitForFunction(()=>showcaseDiagnostics().displayed && showcaseDiagnostics().drawnFrames>2,null,{timeout:20000});
     assert.deepEqual(pageErrors, []);
-    console.log('PASS ('+(useTLS ? 'HTTPS/WSS' : 'HTTP/WS')+'): native 1080p JPEG/MJPEG/WebCodecs/Broadway/WebRTC, HTTP/TLS gateway, touch/hold, idle resume, repeated config, retry + retained frame, foreground reset');
+    console.log(`PASS (${useTLS?'HTTPS/WSS':'HTTP/WS'}, ${profile} ${width}x${height}): native pixels/crop/orientation, touch, static flush, reconnect, foreground without a new VideoConfig`);
     console.log('Synthetic screenshot:', path.join(work, 'browser.png'));
   } finally {
     if (helper && helper.exitCode === null) { helper.stdin.write('q'); await once(helper, 'exit'); }

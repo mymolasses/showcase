@@ -552,7 +552,7 @@ static int run_baa_broker(void) {
             break;
         }
         @autoreleasepool {
-            baa_broker_handle_client(client);
+            if (baa_socket_timeout(client)) baa_broker_handle_client(client);
         }
         close(client);
     }

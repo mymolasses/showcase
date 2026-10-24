@@ -91,7 +91,7 @@ def flags(platform='macos'):
     return ['-DRTC_STATIC=1', '-DRTC_ENABLE_MEDIA=1', '-DRTC_ENABLE_WEBSOCKET=0',
             *[arg for p in data['includes'] for arg in ['-I',p]], *data['libraries'], '-lc++',
             '-framework','VideoToolbox','-framework','CoreMedia','-framework','CoreVideo',
-            '-framework','CoreGraphics','-framework','ImageIO']
+            '-framework','CoreGraphics','-framework','ImageIO','-framework','CoreImage']
 
 def bridge_sources():
     return [str(ROOT/'source'/name) for name in ['browser_bridge.m','browser_jpeg.m','browser_rtc.m']]

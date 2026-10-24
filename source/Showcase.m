@@ -705,6 +705,23 @@ typedef struct {
 
 static const char *first_existing_tool(const char *const paths[]);
 
+/* Command helpers can outlive a force-quit. Bound every launch-recovery
+ * wait so a stuck launchctl/ioreg cannot hold the next startup indefinitely. */
+static int wait_child_bounded(pid_t pid, unsigned milliseconds) {
+    uint64_t deadline = monotonic_nanos_now() + (uint64_t)milliseconds * 1000000;
+    int status = 0;
+    for (;;) {
+        pid_t result = waitpid(pid,&status,WNOHANG);
+        if (result == pid) return status;
+        if (result < 0 && errno != EINTR) return -1;
+        if (monotonic_nanos_now() >= deadline) break;
+        usleep(10000);
+    }
+    kill(pid,SIGKILL);
+    while (waitpid(pid,&status,0) < 0 && errno == EINTR) {}
+    errno = ETIMEDOUT; return -1;
+}
+
 static NSData *capture_process_output(const char *path, char *const argv[]) {
     int pipes[2];
     if (!path || pipe(pipes) != 0) return nil;
@@ -728,10 +745,19 @@ static NSData *capture_process_output(const char *path, char *const argv[]) {
 
     NSMutableData *output = [NSMutableData data];
     uint8_t buffer[8192];
+    uint64_t deadline = monotonic_nanos_now() + 5ULL * NSEC_PER_SEC;
+    BOOL success = YES;
     for (;;) {
+        int milliseconds = (int)((int64_t)(deadline - monotonic_nanos_now()) / 1000000);
+        struct pollfd ready = {.fd=pipes[0],.events=POLLIN};
+        if (milliseconds <= 0) { success = NO; break; }
+        int result = poll(&ready,1,milliseconds);
+        if (result < 0 && errno == EINTR) continue;
+        if (result <= 0) { success = NO; break; }
         ssize_t count = read(pipes[0], buffer, sizeof(buffer));
         if (count > 0) {
             [output appendBytes:buffer length:(NSUInteger)count];
+            if (output.length > 16 * 1024 * 1024) { success = NO; break; }
         } else if (count < 0 && errno == EINTR) {
             continue;
         } else {
@@ -739,9 +765,9 @@ static NSData *capture_process_output(const char *path, char *const argv[]) {
         }
     }
     close(pipes[0]);
-    int status = 0;
-    while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
-    return output;
+    if (!success) kill(pid,SIGKILL);
+    int status = wait_child_bounded(pid,1000);
+    return success && status >= 0 && WIFEXITED(status) && !WEXITSTATUS(status) ? output : nil;
 }
 
 static NSString *wlan_ioreg_snapshot(BOOL fullTree) {
@@ -1131,6 +1157,7 @@ typedef struct {
     CarPlayWLANAttachment wlanAttachment;
 } CarPlayDisplayHardware;
 
+static int displayWLANAttachment;
 static CarPlayDisplayHardware carplay_display_hardware(void) {
     static CarPlayDisplayHardware hardware;
     static dispatch_once_t once;
@@ -1148,12 +1175,11 @@ static CarPlayDisplayHardware carplay_display_hardware(void) {
         NSInteger screenFPS = [screen respondsToSelector:@selector(maximumFramesPerSecond)]
             ? screen.maximumFramesPerSecond : 60;
         hardware.screenFPS = (uint16_t)MAX(30, MIN(screenFPS, 60));
-        hardware.wlanAttachment = wlan_attachment_class();
-        /* HSIC-attached Wi-Fi drops bursts; 30 fps halves them. */
-        hardware.defaultFPS = hardware.wlanAttachment == CarPlayWLANAttachmentHSIC
-            ? 30 : hardware.screenFPS;
     });
-    return hardware;
+    CarPlayDisplayHardware snapshot = hardware;
+    snapshot.wlanAttachment = __atomic_load_n(&displayWLANAttachment,__ATOMIC_RELAXED);
+    snapshot.defaultFPS = snapshot.wlanAttachment == CarPlayWLANAttachmentHSIC ? 30 : snapshot.screenFPS;
+    return snapshot;
 }
 
 static CarPlayVideoPriority carplay_video_priority(void) {
@@ -1719,7 +1745,8 @@ static int run_blocking(const char *path, char *const argv[]) {
     int err = posix_spawn(&pid, path, &actions, NULL, argv, environ);
     posix_spawn_file_actions_destroy(&actions);
     if (err != 0) { ip_log("  posix_spawn FAIL: %s", strerror(err)); return -1; }
-    if (waitpid(pid, &status, 0) < 0) { ip_log("  waitpid FAIL: %s", strerror(errno)); return -1; }
+    status = wait_child_bounded(pid,20000);
+    if (status < 0) { ip_log("  command wait failed: %s", strerror(errno)); return -1; }
     int rc = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
     ip_log("  exit=%d", rc);
     return rc;
@@ -3352,10 +3379,15 @@ typedef NS_ENUM(NSInteger, ConnectStep) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(10 * NSEC_PER_SEC)),
                    dispatch_get_global_queue(QOS_CLASS_BACKGROUND, 0), ^{ send_anonymous_usage(); });
     _diagnosticsEnabled = [[NSUserDefaults standardUserDefaults] boolForKey:DIAGNOSTICS_ENABLED_KEY];
-    /* Settings reads the display hardware; probe the Wi-Fi bus off the main thread now. */
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{ carplay_display_hardware(); });
+    /* Read UIKit screen properties on the main thread. Never enter their
+     * dispatch_once on a worker that the main thread can later wait for. */
+    (void)carplay_display_hardware();
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        __atomic_store_n(&displayWLANAttachment,wlan_attachment_class(),__ATOMIC_RELAXED);
+    });
     /* A session that ended without stopFlow may have left a network paused. */
     dispatch_async(self.bgQueue, ^{
+        ip_log("launch: recovery begin");
         stop_bluetooth_guard();
         showcase_release_other_wifi("launch recovery");
         /* A session that ended without stopFlow can leave BTstack holding the
@@ -3368,6 +3400,7 @@ typedef NS_ENUM(NSInteger, ConnectStep) {
             unlink(BTSTACK_SOCKET);
         }
         restore_system_bluetooth("launch recovery");
+        ip_log("launch: recovery complete");
     });
     self.cars = [[CarStore alloc] init];
 
@@ -3392,6 +3425,7 @@ typedef NS_ENUM(NSInteger, ConnectStep) {
 
     self.window.rootViewController = self.vc;
     [self.window makeKeyAndVisible];
+    ip_log("launch: UI ready");
 
 #ifdef SHOWCASE_ROOTLESS
     if ([[NSUserDefaults standardUserDefaults] boolForKey:BROWSER_PROBE_KEY]) [self setBrowserProbeEnabled:YES];
@@ -3435,7 +3469,7 @@ typedef NS_ENUM(NSInteger, ConnectStep) {
     self.baaLoading = YES;
     self.baaError = nil;
     [self renderState];
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+    dispatch_async(self.bgQueue, ^{
         BOOL started = [self startBAABroker];
         dispatch_async(dispatch_get_main_queue(), ^{
             self.baaLoading = NO;
@@ -3519,7 +3553,8 @@ static pid_t reusable_baa_broker(void) {
         int rc = -1;
         uint8_t *leaf = NULL, *intermediate = NULL;
         int leafLength = 0, intermediateLength = 0;
-        for (int attempt = 0; attempt < 450; attempt++) {
+        uint64_t deadline = monotonic_nanos_now() + 45ULL * NSEC_PER_SEC;
+        while (monotonic_nanos_now() < deadline) {
             if (!pid_alive(self.baaBrokerPid)) {
                 rc = -1;
                 break;

@@ -20,6 +20,9 @@
 #include <errno.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <sys/time.h>
+#include <fcntl.h>
+#include <poll.h>
 
 #define BAA_BROKER_PATH          "/tmp/showcase_baa.sock"
 #define BAA_BROKER_MAGIC         "BAA3"
@@ -89,6 +92,13 @@ static inline void baa_make_header(uint8_t header[BAA_BROKER_HEADER_SIZE],
     baa_write_le32(header + 8, payloadLength);
 }
 
+/* A stale peer must not leave launch/preheat waiting forever. Apply to both
+ * ends: a client killed halfway through a request must release the broker. */
+static inline bool baa_socket_timeout(int fd) {
+    struct timeval timeout = {.tv_sec = 2, .tv_usec = 0};
+    return setsockopt(fd,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof(timeout)) == 0 &&
+           setsockopt(fd,SOL_SOCKET,SO_SNDTIMEO,&timeout,sizeof(timeout)) == 0;
+}
 static inline int baa_broker_connect(void) {
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) return -1;
@@ -98,7 +108,17 @@ static inline int baa_broker_connect(void) {
     address.sun_family = AF_UNIX;
     strncpy(address.sun_path, BAA_BROKER_PATH,
             sizeof(address.sun_path) - 1);
-    if (connect(fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
+    int flags = fcntl(fd,F_GETFL,0);
+    if (flags < 0 || fcntl(fd,F_SETFL,flags|O_NONBLOCK) < 0) { close(fd); return -1; }
+    int result = connect(fd, (struct sockaddr *)&address, sizeof(address));
+    if (result < 0 && errno == EINPROGRESS) {
+        struct pollfd wait = {.fd=fd,.events=POLLOUT};
+        int error = 0; socklen_t length = sizeof(error);
+        result = poll(&wait,1,2000);
+        if (result > 0 && getsockopt(fd,SOL_SOCKET,SO_ERROR,&error,&length) == 0 && !error) result = 0;
+        else result = -1;
+    }
+    if (result < 0 || fcntl(fd,F_SETFL,flags) < 0 || !baa_socket_timeout(fd)) {
         close(fd);
         return -1;
     }

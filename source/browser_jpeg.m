@@ -6,6 +6,7 @@
 #import <VideoToolbox/VideoToolbox.h>
 #import <CoreGraphics/CoreGraphics.h>
 #import <ImageIO/ImageIO.h>
+#import <CoreImage/CoreImage.h>
 #include <pthread.h>
 #include <time.h>
 #include <math.h>
@@ -19,6 +20,13 @@ static bool scheduled, needsKey = true, configurationPending;
 static size_t pendingBytes;
 static uint64_t encoded, decoded, dropped, errors;
 static NSString *lastError;
+static OSStatus lastStatus;
+static OSType pixelFormat;
+static unsigned avcProfile, recoveryCount, consecutiveFailures;
+static bool decoderFailed;
+static double retryAfter;
+static NSData *decoderConfig;
+static CIContext *imageContext;
 static ShowcaseJPEGOutput publish;
 static VTDecompressionSessionRef decoder;
 static CMVideoFormatDescriptionRef format;
@@ -33,8 +41,13 @@ static double jpeg_now(void) {
     struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
     return t.tv_sec + t.tv_nsec / 1e9;
 }
-static void record_error(NSString *message) {
-    pthread_mutex_lock(&jpegLock); errors++; lastError = message; needsKey = true;
+static void record_error(NSString *message, OSStatus status, bool recover) {
+    pthread_mutex_lock(&jpegLock); errors++; lastError = message; lastStatus = status;
+    if (recover) {
+        needsKey = decoderFailed = true;
+        dropped += pending.count; [pending removeAllObjects]; pendingBytes = 0;
+        if (pendingImage) { CVPixelBufferRelease(pendingImage); pendingImage = NULL; }
+    }
     pthread_mutex_unlock(&jpegLock);
 }
 static void dispose_decoder(void) {
@@ -51,12 +64,15 @@ static void encode_picture(CVImageBufferRef image, CMTime pts, uint32_t stream) 
         if (current) lastEncoded = jpeg_now();
         pthread_mutex_unlock(&jpegLock);
         if (!current) return;
-        CVPixelBufferLockBaseAddress(image, kCVPixelBufferLock_ReadOnly);
         size_t width = CVPixelBufferGetWidth(image), height = CVPixelBufferGetHeight(image);
         CGColorSpaceRef rgb = CGColorSpaceCreateDeviceRGB();
-        CGContextRef original = CGBitmapContextCreate(CVPixelBufferGetBaseAddress(image), width, height, 8,
-            CVPixelBufferGetBytesPerRow(image), rgb, kCGBitmapByteOrder32Little | kCGImageAlphaPremultipliedFirst);
-        CGImageRef full = original ? CGBitmapContextCreateImage(original) : NULL;
+        /* Do not ask the H.264 decoder to convert to BGRA. Native output can
+         * be NV12 (video/full range), including padded planes. Core Image
+         * handles its color attachments/strides separately. A software
+         * context also works in the root helper without a UIKit/GPU surface. */
+        if (!imageContext) imageContext = [CIContext contextWithOptions:@{kCIContextUseSoftwareRenderer:@YES}];
+        CIImage *source = [CIImage imageWithCVPixelBuffer:image];
+        CGImageRef full = [imageContext createCGImage:source fromRect:CGRectMake(0,0,width,height)];
         CGSize visible = CMVideoFormatDescriptionGetPresentationDimensions(format,true,true);
         size_t visibleWidth = visible.width > 0 ? MIN(width,(size_t)llround(visible.width)) : width;
         size_t visibleHeight = visible.height > 0 ? MIN(height,(size_t)llround(visible.height)) : height;
@@ -83,9 +99,8 @@ static void encode_picture(CVImageBufferRef image, CMTime pts, uint32_t stream) 
         if (scaled) CGContextRelease(scaled);
         if (cropped) CGImageRelease(cropped);
         if (full) CGImageRelease(full);
-        if (original) CGContextRelease(original);
-        CGColorSpaceRelease(rgb); CVPixelBufferUnlockBaseAddress(image, kCVPixelBufferLock_ReadOnly);
-        if (!success || !data.length || data.length > 2 * 1024 * 1024) { record_error(@"JPEG encoding failed or image too large"); return; }
+        CGColorSpaceRelease(rgb);
+        if (!success || !data.length || data.length > 2 * 1024 * 1024) { record_error(@"JPEG pixel conversion/encoding failed or image too large",0,false); return; }
         pthread_mutex_lock(&jpegLock);
         current = wantedGeneration == stream && publish;
         uint64_t micros = (uint64_t)MAX(0,CMTimeConvertScale(pts,1000000,kCMTimeRoundingMethod_Default).value);
@@ -96,10 +111,15 @@ static void encode_picture(CVImageBufferRef image, CMTime pts, uint32_t stream) 
 }
 static void picture(void *unused, void *ref, OSStatus status, VTDecodeInfoFlags flags,
                     CVImageBufferRef image, CMTime pts, CMTime duration) {
-    (void)unused; (void)ref; (void)flags; (void)duration;
-    if (status || !image) { record_error([NSString stringWithFormat:@"JPEG decoder: %d",(int)status]); return; }
+    (void)unused; (void)ref; (void)duration;
+    if (status) { record_error([NSString stringWithFormat:@"JPEG decoder output: %d",(int)status],status,true); return; }
+    if (!image) {
+        if (!(flags & kVTDecodeInfo_FrameDropped)) record_error(@"JPEG decoder returned no image",0,true);
+        return;
+    }
     pthread_mutex_lock(&jpegLock); decoded++;
     if (wantedGeneration != decodingGeneration || !publish) { pthread_mutex_unlock(&jpegLock); return; }
+    pixelFormat = CVPixelBufferGetPixelFormatType(image); consecutiveFailures = 0; decoderFailed = false;
     if (pendingImage) CVPixelBufferRelease(pendingImage);
     pendingImage = CVPixelBufferRetain(image); pendingImageTime = pts; pendingImageGeneration = decodingGeneration;
     if (!imageScheduled) {
@@ -115,29 +135,27 @@ static void picture(void *unused, void *ref, OSStatus status, VTDecodeInfoFlags 
     }
     pthread_mutex_unlock(&jpegLock);
 }
-static bool configure_decoder(NSData *avcc) {
+static OSStatus configure_decoder(NSData *avcc) {
     const uint8_t *p = avcc.bytes; size_t size = avcc.length, at = 6;
-    if (size < 7 || (p[4] & 3) != 3) return false;
+    if (size < 7 || (p[4] & 3) != 3) return kCMFormatDescriptionError_InvalidParameter;
     const uint8_t *parameters[64]; size_t lengths[64]; unsigned total = 0;
     for (unsigned group = 0; group < 2; group++) {
         unsigned count = group ? (at < size ? p[at++] : 0) : p[5] & 31;
-        if (!count) return false;
+        if (!count) return kCMFormatDescriptionError_InvalidParameter;
         for (unsigned n = 0; n < count; n++) {
-            if (at + 2 > size || total >= 64) return false;
+            if (at + 2 > size || total >= 64) return kCMFormatDescriptionError_InvalidParameter;
             size_t length = ((size_t)p[at] << 8) | p[at + 1]; at += 2;
-            if (!length || length > size - at) return false;
+            if (!length || length > size - at) return kCMFormatDescriptionError_InvalidParameter;
             parameters[total] = p + at; lengths[total++] = length; at += length;
         }
     }
     OSStatus status = CMVideoFormatDescriptionCreateFromH264ParameterSets(kCFAllocatorDefault, total,
         parameters, lengths, 4, &format);
-    if (status) return false;
-    NSDictionary *attributes = @{(__bridge NSString *)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA),
-        (__bridge NSString *)kCVPixelBufferIOSurfacePropertiesKey: @{}};
+    if (status) return status;
     VTDecompressionOutputCallbackRecord callback = {picture, NULL};
     status = VTDecompressionSessionCreate(kCFAllocatorDefault, format, NULL,
-        (__bridge CFDictionaryRef)attributes, &callback, &decoder);
-    return status == noErr;
+        NULL, &callback, &decoder);
+    return status;
 }
 static void run_worker(void) {
     unsigned batch = 0;
@@ -153,10 +171,29 @@ static void run_worker(void) {
         pthread_mutex_unlock(&jpegLock);
         if (configure) {
             dispose_decoder();
-            pthread_mutex_lock(&jpegLock); decodingGeneration = next; lastEncoded = -1; pthread_mutex_unlock(&jpegLock);
-            if (config && !configure_decoder(config)) record_error(@"Cannot initialize JPEG decoder");
+            decoderConfig = config;
+            pthread_mutex_lock(&jpegLock); decodingGeneration = next; lastEncoded = -1;
+            decoderFailed = false; consecutiveFailures = 0; retryAfter = 0; pixelFormat = 0;
+            avcProfile = config.length > 1 ? ((const uint8_t *)config.bytes)[1] : 0;
+            lastError = nil; lastStatus = 0;
+            pthread_mutex_unlock(&jpegLock);
+            OSStatus error = config ? configure_decoder(config) : noErr;
+            if (error) record_error([NSString stringWithFormat:@"JPEG decoder creation: %d",(int)error],error,true);
         }
-        if (!frame || !decoder || [frame[@"generation"] unsignedIntValue] != decodingGeneration) continue;
+        if (!frame || [frame[@"generation"] unsignedIntValue] != decodingGeneration) continue;
+        pthread_mutex_lock(&jpegLock);
+        bool failed = decoderFailed;
+        bool recover = failed && [frame[@"key"] boolValue] && consecutiveFailures < 3 && jpeg_now() >= retryAfter;
+        if (recover) { recoveryCount++; consecutiveFailures++; retryAfter = jpeg_now()+2; decoderFailed = false; }
+        if (failed && !recover) { needsKey = true; dropped++; }
+        pthread_mutex_unlock(&jpegLock);
+        if (failed && !recover) continue;
+        if (recover) {
+            dispose_decoder();
+            OSStatus error = configure_decoder(decoderConfig);
+            if (error) { record_error([NSString stringWithFormat:@"JPEG decoder recovery: %d",(int)error],error,true); continue; }
+        }
+        if (!decoder) continue;
         NSData *data = frame[@"data"];
         CMBlockBufferRef block = NULL; CMSampleBufferRef sample = NULL;
         OSStatus status = CMBlockBufferCreateWithMemoryBlock(kCFAllocatorDefault, NULL, data.length, kCFAllocatorDefault,
@@ -165,9 +202,15 @@ static void run_worker(void) {
         CMSampleTimingInfo timing = {kCMTimeInvalid, CMTimeMake([frame[@"time"] longLongValue], 1000000), kCMTimeInvalid};
         size_t length = data.length;
         if (!status) status = CMSampleBufferCreateReady(kCFAllocatorDefault, block, format, 1, 1, &timing, 1, &length, &sample);
+        if (!status) {
+            CFArrayRef attachments = CMSampleBufferGetSampleAttachmentsArray(sample,true);
+            if (attachments && CFArrayGetCount(attachments)) CFDictionarySetValue(
+                (CFMutableDictionaryRef)CFArrayGetValueAtIndex(attachments,0),kCMSampleAttachmentKey_NotSync,
+                [frame[@"key"] boolValue] ? kCFBooleanFalse : kCFBooleanTrue);
+        }
         if (!status) status = VTDecompressionSessionDecodeFrame(decoder, sample, 0, NULL, NULL);
         if (sample) CFRelease(sample); if (block) CFRelease(block);
-        if (status) record_error([NSString stringWithFormat:@"JPEG decode submission: %d", (int)status]);
+        if (status) record_error([NSString stringWithFormat:@"JPEG decode submission: %d", (int)status],status,true);
     }
 }
 static void schedule_locked(void) {
@@ -190,7 +233,7 @@ bool showcase_jpeg_frame(uint32_t generation, uint64_t micros, bool key, NSData 
     }
     if (needsKey && !key) { dropped++; pthread_mutex_unlock(&jpegLock); return false; }
     needsKey = false;
-    [pending addObject:@{@"generation": @(generation), @"time": @(micros), @"data": frame}]; pendingBytes += frame.length;
+    [pending addObject:@{@"generation": @(generation), @"time": @(micros), @"key":@(key), @"data": frame}]; pendingBytes += frame.length;
     schedule_locked(); pthread_mutex_unlock(&jpegLock); return true;
 }
 void showcase_jpeg_reset(void) { showcase_jpeg_configure(0, nil, NULL); }
@@ -203,6 +246,8 @@ NSDictionary *showcase_jpeg_stats(void) {
     NSDictionary *state = @{@"jpegEncodedFrames": @(encoded), @"jpegDecodedFrames": @(decoded),
         @"jpegDroppedInputs": @(dropped), @"jpegErrors": @(errors), @"jpegQueueBytes": @(pendingBytes),
         @"jpegLastError": lastError ?: @"", @"jpegMaxFps": @15, @"jpegMaxWidth": @1280,
+        @"jpegLastStatus":@(lastStatus), @"jpegPixelFormat":@(pixelFormat), @"jpegAVCProfile":@(avcProfile),
+        @"jpegRecoveryCount":@(recoveryCount), @"jpegRecoveryExhausted":@(decoderFailed && consecutiveFailures>=3),
         @"jpegLastEncodedMicros":@(lastEncodedMicros), @"jpegImagePending":@(pendingImage!=NULL)};
     pthread_mutex_unlock(&jpegLock); return state;
 }
