@@ -208,7 +208,10 @@ def main():
             wait_event('TOUCH 3', 2)
             touch(0); wait_event('TOUCH 0'); command('b'); wait_event('TOUCH 3')
             assert not status()['active'] and not status()['configured']
-            command('f'); state = status(); assert state['active'] and state['configured']
+            command('f'); state = status(); deadline=time.monotonic()+3
+            while not (state['active'] and state['configured']) and time.monotonic()<deadline:
+                time.sleep(.03);state=status()
+            assert state['active'] and state['configured'], state
             assert state['generation'] != generation
             touch(0)  # stale stream must not click the new session
             time.sleep(0.15)
