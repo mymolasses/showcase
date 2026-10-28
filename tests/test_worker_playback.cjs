@@ -55,7 +55,8 @@ function wire(data){
     const args=['--enable-unsafe-swiftshader','--use-angle=swiftshader','--no-proxy-server','--host-resolver-rules=MAP insecure.showcase.test 127.0.0.1'];
     if(spki)args.push('--ignore-certificate-errors-spki-list='+spki);
     browser=await chromium.launch({executablePath:process.env.CHROME||undefined,headless:true,args});
-    const page=await browser.newPage({viewport:{width:1000,height:800}});let workers=0;page.on('worker',()=>workers++);
+    const page=await browser.newPage({viewport:{width:1000,height:800}});let workers=0,mediaWorker;page.on('worker',worker=>{workers++;mediaWorker=worker;});
+    const redPixel=()=>mediaWorker.evaluate(()=>{const p=new Uint8Array(4);gl.readPixels(10,canvas.height-11,1,1,gl.RGBA,gl.UNSIGNED_BYTE,p);return [...p];});
     const base=`${tls?'https':'http'}://127.0.0.1:${port}`;await page.goto(base+'/status');
     for(const profile of ['baseline','main','high']){
       const encoded=await page.evaluate(async profile=>{
@@ -80,7 +81,7 @@ function wire(data){
       await ready();
       assert.equal(await page.locator('video,img,#renderer').count(),0);
       assert.equal(await page.evaluate(()=>showcaseDiagnostics().renderer),'webcodecs-worker');
-      const color=await page.evaluate(()=>{const source=document.querySelector('#display canvas'),c=document.createElement('canvas');c.width=c.height=1;const ctx=c.getContext('2d');ctx.drawImage(source,10,10,1,1,0,0,1,1);return[...ctx.getImageData(0,0,1,1).data];});
+      const color=await redPixel();
       assert(color[0]>color[2]+100 && color[3]===255,'WebGL must render real red top-left AVC pixels: '+color);
       const before=mediaConnections;for(const s of media)s.write(wire(config()));await sleep(300);assert.equal(mediaConnections,before,'identical config must not reconnect');
       flowing=false;await sleep(700);const snapshot=await page.evaluate(()=>showcaseDiagnostics().drawnFrames);await sleep(1700);
@@ -97,7 +98,7 @@ function wire(data){
       assert.equal(workers,priorWorkers+1,'recovery reuses the same Worker and GPU context');
       await page.click('#disconnect');await sleep(150);
       assert.equal(await page.evaluate(()=>showcaseDiagnostics().retainedFrame),true,'disconnect retains final image');
-      const retained=await page.evaluate(()=>{const c=document.createElement('canvas');c.width=c.height=1;const ctx=c.getContext('2d');ctx.drawImage(document.querySelector('#display canvas'),10,10,1,1,0,0,1,1);return [...ctx.getImageData(0,0,1,1).data];});
+      const retained=await redPixel();
       assert(retained[0]>retained[2]+100 && retained[3]===255,'the original GPU canvas retains real pixels after disconnect');
       clearInterval(timer);timer=null;
       console.log('PASS: '+(tls?'HTTPS/WSS':'loopback HTTP/WS')+' '+profile+' real H.264, Worker/WebGL pixels, static screen, touch/hold, reconnect and retained image');

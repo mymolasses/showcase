@@ -29,7 +29,7 @@ assert(Number.isInteger(fps) && fps >= 1 && fps <= 60);
 
 (async () => {
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'showcase-browser-e2e-'));
-  let browser, page, server, helper, gateway, output = '', stderr = '';
+  let browser, page, mediaWorker, server, helper, gateway, output = '', stderr = '';
   let stage='compile';
   const progress=name=>{stage=name;console.log('[native-browser] '+name);};
   const bounded=(promise,label,ms=20000)=>{
@@ -46,6 +46,7 @@ assert(Number.isInteger(fps) && fps >= 1 && fps <= 60);
     server.listen(0, '127.0.0.1'); await once(server, 'listening');
     browser = await chromium.launch({executablePath: process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', headless: true, args: ['--enable-unsafe-swiftshader','--use-angle=swiftshader','--no-proxy-server', ...(useTLS ? ['--host-resolver-rules=MAP '+domain+' 127.0.0.1', '--ignore-certificate-errors-spki-list='+certificate.spki] : [])]});
     page = await browser.newPage({viewport: {width: 1280, height: 900}});
+    page.on('worker',worker=>{mediaWorker=worker;});
     // Worker rendering must not depend on main-page animation callbacks.
     const waitFor=(fn,arg,options={})=>page.waitForFunction(fn,arg,{polling:100,...options});
     await page.goto(`http://127.0.0.1:${server.address().port}`);
@@ -161,12 +162,15 @@ assert(Number.isInteger(fps) && fps >= 1 && fps <= 60);
     progress('manual reconnect');
     await page.click('#reconnect',{force:true});
     await waitFor(()=>showcaseDiagnostics().displayed && showcaseDiagnostics().drawnFrames>2,null,{timeout:20000});
-    // Sample actual pixels after draining GPU work. Full-canvas readback during
-    // live software rendering serializes the GPU and does not test playback.
+    // Inspect the actual framebuffer in its owning Worker. Copying a transferred
+    // placeholder canvas back into a main-thread 2D canvas can stall macOS's
+    // headless compositor even when the decoder and GPU are progressing.
     helper.stdin.write('s');await page.waitForTimeout(700);progress('decoded pixel checks');
-    const color=await evaluate(()=>{const source=document.querySelector('#display canvas');const c=document.createElement('canvas');c.width=c.height=1;const ctx=c.getContext('2d');ctx.drawImage(source,10,source.height-10,1,1,0,0,1,1);return [...ctx.getImageData(0,0,1,1).data];});
+    const {color,corner}=await bounded(mediaWorker.evaluate(()=>{
+      const pixel=(x,y)=>{const p=new Uint8Array(4);gl.readPixels(x,y,1,1,gl.RGBA,gl.UNSIGNED_BYTE,p);return [...p];};
+      return {color:pixel(10,10),corner:pixel(Math.floor(canvas.width/64),canvas.height-Math.floor(canvas.height/36)-1)};
+    }),'Worker framebuffer readback');
     assert(color[2]>color[0] && color[2]>40 && color[3]===255,'decoded fixture pixels: '+color);
-    const corner=await evaluate(()=>{const source=document.querySelector('#display canvas');const c=document.createElement('canvas');c.width=c.height=1;const ctx=c.getContext('2d');ctx.drawImage(source,source.width/64,source.height/36,1,1,0,0,1,1);return [...ctx.getImageData(0,0,1,1).data];});
     assert(corner[0]>corner[2]+50,'red marker must remain at top-left: '+corner);
     helper.stdin.write('c');
     assert.equal(await page.locator('video,img').count(),0);
