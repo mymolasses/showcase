@@ -13,7 +13,7 @@ function wire(data){
 }
 (async()=>{
   const tls=process.env.SHOWCASE_TEST_TLS==='1',work=fs.mkdtempSync(path.join(os.tmpdir(),'showcase-worker-'));
-  let browser,timer,sequence=0,generation=7,flowing=true,description,frames,mediaConnections=0;
+  let browser,page,timer,sequence=0,generation=7,flowing=true,description,frames,mediaConnections=0;
   const sockets=new Set(),media=new Set(),controls=new Set(),touches=[],pageErrors=[];
   let tlsOptions,spki;
   if(tls){
@@ -57,7 +57,8 @@ function wire(data){
     const args=['--enable-unsafe-swiftshader','--use-angle=swiftshader','--no-proxy-server','--host-resolver-rules=MAP insecure.showcase.test 127.0.0.1'];
     if(spki)args.push('--ignore-certificate-errors-spki-list='+spki);
     browser=await chromium.launch({executablePath:process.env.CHROME||undefined,headless:true,args});
-    const page=await browser.newPage({viewport:{width:1000,height:800}});let workers=0,mediaWorker;page.on('worker',worker=>{workers++;mediaWorker=worker;});
+    page=await browser.newPage({viewport:{width:1000,height:800}});let workers=0,mediaWorker;page.on('worker',worker=>{workers++;mediaWorker=worker;});
+    const waitFor=(fn,arg,options={})=>page.waitForFunction(fn,arg,{polling:100,...options});
     const redPixel=()=>mediaWorker.evaluate(()=>{const p=new Uint8Array(4);gl.readPixels(10,canvas.height-11,1,1,gl.RGBA,gl.UNSIGNED_BYTE,p);return [...p];});
     const base=`${tls?'https':'http'}://127.0.0.1:${port}`;await page.goto(base+'/status');
     for(const profile of ['baseline','main','high']){
@@ -79,7 +80,7 @@ function wire(data){
       },33);
       if(profile==='baseline')page.on('pageerror',e=>pageErrors.push(e.message));
       const priorWorkers=workers;await page.goto(base);
-      const ready=()=>page.waitForFunction(()=>window.showcaseDiagnostics?.().displayed&&showcaseDiagnostics().drawnFrames>5,null,{timeout:15000});
+      const ready=()=>waitFor(()=>window.showcaseDiagnostics?.().displayed&&showcaseDiagnostics().drawnFrames>5,null,{timeout:15000});
       await ready();
       assert.equal(await page.locator('video,img,#renderer').count(),0);
       assert.equal(await page.evaluate(()=>showcaseDiagnostics().renderer),'webcodecs-worker');
@@ -89,7 +90,7 @@ function wire(data){
       flowing=false;await sleep(700);const snapshot=await page.evaluate(()=>showcaseDiagnostics().drawnFrames);await sleep(1700);
       assert.equal(await page.evaluate(()=>showcaseDiagnostics().drawnFrames),snapshot,'a timer must not report static frames');assert.equal(mediaConnections,before);
       flowing=true;sequence=Math.ceil(sequence/30)*30;
-      await page.waitForFunction(n=>showcaseDiagnostics().drawnFrames>n,snapshot);
+      await waitFor(n=>showcaseDiagnostics().drawnFrames>n,snapshot);
       await page.mouse.click(500,400);await sleep(100);assert(touches.some(m=>m.phase===0&&m.x===width/2&&m.y===height/2),'touch uses source coordinates');
       await page.mouse.move(500,400);await page.mouse.down();await sleep(900);assert(touches.some(m=>m.type==='hold'));await page.evaluate(()=>window.dispatchEvent(new Event('blur')));await page.mouse.up();
       await page.click('#menu');await page.click('#reconnect');await ready();
@@ -108,11 +109,15 @@ function wire(data){
     }
     if(!tls){
       const count=mediaConnections;await page.goto(`http://insecure.showcase.test:${port}/`);
-      await page.waitForFunction(()=>document.querySelector('#notice').textContent.includes('HTTPS'));
+      await waitFor(()=>document.querySelector('#notice').textContent.includes('HTTPS'));
       assert.equal(await page.evaluate(()=>isSecureContext),false);assert.equal(mediaConnections,count,'insecure page must not start media');
       console.log('PASS: real insecure HTTP origin fails clearly without fallback');
     }
     assert.deepEqual(pageErrors,[]);
+  }catch(error){
+    console.error('Worker playback diagnostics:',await page?.evaluate(()=>JSON.stringify(window.showcaseDiagnostics?.())).catch(()=> 'page unavailable'));
+    console.error('Fixture transport:',JSON.stringify({mediaConnections,media:media.size,controls:controls.size,sequence,width,height}));
+    throw error;
   }finally{
     clearInterval(timer);if(browser)await browser.close();for(const s of sockets)s.destroy();await new Promise(r=>server.close(r));
     for(const name of fs.readdirSync(work))fs.unlinkSync(path.join(work,name));fs.rmdirSync(work);
