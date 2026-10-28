@@ -30,6 +30,13 @@ assert(Number.isInteger(fps) && fps >= 1 && fps <= 60);
 (async () => {
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'showcase-browser-e2e-'));
   let browser, page, server, helper, gateway, output = '', stderr = '';
+  let stage='compile';
+  const progress=name=>{stage=name;console.log('[native-browser] '+name);};
+  const bounded=(promise,label,ms=20000)=>{
+    let timer;return Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error(label+' timed out during '+stage)),ms);})]).finally(()=>clearTimeout(timer));
+  };
+  const evaluate=(...args)=>bounded(page.evaluate(...args),'page evaluation');
+  const watchdog=setTimeout(()=>{console.error('Native browser suite exceeded 180s during '+stage);helper?.kill('SIGKILL');gateway?.kill('SIGKILL');process.exit(1);},180000);
   const certificate = useTLS ? fixtureTLS(work, domain) : null;
   try {
     require('./native_browser_fixture.cjs')(path.join(work,'bridge'));
@@ -42,7 +49,8 @@ assert(Number.isInteger(fps) && fps >= 1 && fps <= 60);
     // Worker rendering must not depend on main-page animation callbacks.
     const waitFor=(fn,arg,options={})=>page.waitForFunction(fn,arg,{polling:100,...options});
     await page.goto(`http://127.0.0.1:${server.address().port}`);
-    const encoded = await page.evaluate(async ({codec,width,height,fps}) => {
+    progress('encode fixture');
+    const encoded = await evaluate(async ({codec,width,height,fps}) => {
       if (!window.VideoEncoder) throw Error('Chrome WebCodecs encoder unavailable');
       const frames = []; let description = null, failure = null;
       const encoder = new VideoEncoder({output(chunk, meta) {
@@ -91,6 +99,7 @@ assert(Number.isInteger(fps) && fps >= 1 && fps <= 60);
     const connections=role=>stderr.split('[BROWSER] '+role+' connected').length-1;
     page.on('pageerror', error => pageErrors.push(error.message));
     await page.goto(useTLS ? `https://${domain}:${tlsPort}/` : `http://127.0.0.1:${frontPort}/`);
+    progress('first decoded frame');
     assert.equal(await page.locator('input').count(), 0);
     await waitFor(()=>window.showcaseDiagnostics?.().displayed && showcaseDiagnostics().drawnFrames>2,null,{timeout:20000});
     await until(() => stderr.includes('[BROWSER] control connected'), 'browser control channel');
@@ -100,6 +109,7 @@ assert(Number.isInteger(fps) && fps >= 1 && fps <= 60);
     assert.equal(await page.locator('#renderer').count(),0);
     assert.equal(await page.locator('#display canvas').evaluate(c=>getComputedStyle(c).objectFit),'contain');
     const rect = await page.locator('#surface').boundingBox();
+    progress('pointer drag and long press');
     const before = output.match(/TOUCH 0 /g)?.length || 0;
     await page.mouse.click(rect.x + rect.width / 2, rect.y + 3); // letterbox
     await page.waitForTimeout(150);
@@ -118,21 +128,23 @@ assert(Number.isInteger(fps) && fps >= 1 && fps <= 60);
     const cancels = output.match(/TOUCH 3 /g)?.length || 0;
     await page.waitForTimeout(1300);
     assert.equal(output.match(/TOUCH 3 /g)?.length || 0, cancels, 'long press must remain down');
-    await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+    await evaluate(() => window.dispatchEvent(new Event('blur')));
     await until(() => (output.match(/TOUCH 3 /g)?.length || 0) > cancels, 'blur -> production touch cancel');
     await page.mouse.up();
     // A 1.5s route check must not block HTTP or the active media/control relay.
     const diagURL=useTLS ? `https://${domain}:${tlsPort}/probe.json` : `http://127.0.0.1:${frontPort}/probe.json`;
+    progress('route checks during playback');
     for(let i=0;i<8;i++) {
-      const elapsed=await page.evaluate(async url=>{const start=performance.now();const r=await fetch(url);if(!r.ok)throw Error('probe response');await r.json();return performance.now()-start;},diagURL);
+      const elapsed=await evaluate(async url=>{const start=performance.now();const r=await fetch(url);if(!r.ok)throw Error('probe response');await r.json();return performance.now()-start;},diagURL);
       assert(elapsed<1000, 'route worker blocked forwarding: '+elapsed+'ms');
       await page.waitForTimeout(250);
     }
     // Exercise the actual static-screen/gap and repeated-config failure paths.
-    const initialTime = await page.evaluate(()=>showcaseDiagnostics().drawnFrames);
+    progress('static screen and timestamp gap');
+    const initialTime = await evaluate(()=>showcaseDiagnostics().drawnFrames);
     helper.stdin.write('s');
     await page.waitForTimeout(2300);
-    assert.equal(await page.evaluate(()=>showcaseDiagnostics().displayed),true);
+    assert.equal(await evaluate(()=>showcaseDiagnostics().displayed),true);
     helper.stdin.write('r');
     await page.waitForTimeout(100);
     assert.equal(connections('media'), 1);
@@ -148,23 +160,27 @@ assert(Number.isInteger(fps) && fps >= 1 && fps <= 60);
     assert.equal(await page.locator('#notice').isVisible(), false);
     // Capture the actual decoded canvas rather than waiting for the headless
     // macOS page compositor to produce a full-window screenshot.
-    const png=await page.evaluate(()=>{const source=document.querySelector('#display canvas');const c=document.createElement('canvas');c.width=source.width;c.height=source.height;c.getContext('2d').drawImage(source,0,0);return c.toDataURL('image/png');});
+    progress('decoded canvas readback');
+    const png=await evaluate(()=>{const source=document.querySelector('#display canvas');const c=document.createElement('canvas');c.width=source.width;c.height=source.height;c.getContext('2d').drawImage(source,0,0);return c.toDataURL('image/png');});
     fs.writeFileSync(path.join(work,'browser.png'),Buffer.from(png.split(',')[1],'base64'));
+    progress('manual reconnect');
     await page.click('#reconnect',{force:true});
     await waitFor(()=>showcaseDiagnostics().displayed && showcaseDiagnostics().drawnFrames>2,null,{timeout:20000});
-    const color=await page.evaluate(()=>{const source=document.querySelector('#display canvas');const c=document.createElement('canvas');c.width=c.height=1;const ctx=c.getContext('2d');ctx.drawImage(source,10,source.height-10,1,1,0,0,1,1);return [...ctx.getImageData(0,0,1,1).data];});
+    const color=await evaluate(()=>{const source=document.querySelector('#display canvas');const c=document.createElement('canvas');c.width=c.height=1;const ctx=c.getContext('2d');ctx.drawImage(source,10,source.height-10,1,1,0,0,1,1);return [...ctx.getImageData(0,0,1,1).data];});
     assert(color[2]>color[0] && color[2]>40 && color[3]===255,'decoded fixture pixels: '+color);
-    const corner=await page.evaluate(()=>{const source=document.querySelector('#display canvas');const c=document.createElement('canvas');c.width=c.height=1;const ctx=c.getContext('2d');ctx.drawImage(source,source.width/64,source.height/36,1,1,0,0,1,1);return [...ctx.getImageData(0,0,1,1).data];});
+    const corner=await evaluate(()=>{const source=document.querySelector('#display canvas');const c=document.createElement('canvas');c.width=c.height=1;const ctx=c.getContext('2d');ctx.drawImage(source,source.width/64,source.height/36,1,1,0,0,1,1);return [...ctx.getImageData(0,0,1,1).data];});
     assert(corner[0]>corner[2]+50,'red marker must remain at top-left: '+corner);
     assert.equal(await page.locator('video,img').count(),0);
     // Actual service loss: retain the last image, back off, recover new sockets.
-    helper.stdin.write('q'); await once(helper, 'exit');
+    progress('native service loss and restart');
+    helper.stdin.write('q'); await bounded(once(helper, 'exit'),'native service exit');
     await waitFor(() => document.querySelector('#state').textContent.includes('重试'));
     assert.equal(await page.locator('#poster').isVisible(), true);
     helper = spawn(path.join(work, 'bridge'), [String(port), fixture, `${width}x${height}`], {stdio: ['pipe', 'pipe', 'pipe']});
     helper.stdout.on('data', bytes => { output += bytes.toString(); });
     helper.stderr.on('data', bytes => { stderr += bytes.toString(); });
     await waitFor(()=>showcaseDiagnostics().displayed && showcaseDiagnostics().drawnFrames>2,null,{timeout:20000});
+    progress('native foreground transition');
     helper.stdin.write('b');
     await waitFor(() => document.querySelector('#notice').textContent.includes('前台'));
     helper.stdin.write('f');
@@ -173,14 +189,15 @@ assert(Number.isInteger(fps) && fps >= 1 && fps <= 60);
     console.log(`PASS (${useTLS?'HTTPS/WSS':'HTTP/WS'}, ${profile} ${width}x${height}): pixels/crop/orientation, touch, static flush, reconnect, foreground without a new VideoConfig`);
     console.log('Synthetic decoded canvas:', path.join(work, 'browser.png'));
   } catch(error) {
-    console.error('Playback diagnostics:',await page?.evaluate(()=>JSON.stringify(window.showcaseDiagnostics?.())).catch(()=> 'page unavailable'));
+    console.error('Playback diagnostics:',await bounded(page?.evaluate(()=>JSON.stringify(window.showcaseDiagnostics?.())),'diagnostics',5000).catch(()=> 'page unavailable'));
     console.error('Bridge stderr:',stderr.slice(-6000),'Bridge output:',output.slice(-2000));
     throw error;
   } finally {
-    if (helper && helper.exitCode === null) { helper.stdin.write('q'); await once(helper, 'exit'); }
-    if (gateway && gateway.exitCode === null) { gateway.kill('SIGTERM'); await once(gateway,'exit'); }
+    if (helper && helper.exitCode === null) { helper.stdin.write('q'); await bounded(once(helper, 'exit'),'native service cleanup',5000).catch(()=>helper.kill('SIGKILL')); }
+    if (gateway && gateway.exitCode === null) { gateway.kill('SIGTERM'); await bounded(once(gateway,'exit'),'gateway cleanup',5000).catch(()=>gateway.kill('SIGKILL')); }
     if (server) server.close();
-    if (browser) await browser.close();
+    if (browser) await bounded(browser.close(),'Chrome cleanup',10000).catch(()=>{});
+    clearTimeout(watchdog);
     // Keep only the synthetic screenshot as visual evidence.
     for (const name of fs.readdirSync(work)) if(name !== 'browser.png') fs.rmSync(path.join(work, name), {recursive:true,force: true});
   }
