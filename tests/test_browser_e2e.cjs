@@ -82,7 +82,7 @@ const width = fullHD ? 1920 : 1600, height = fullHD ? 1080 : 900;
     gateway.stderr.on('data',bytes=>{stderr+=bytes.toString();});
     await until(()=>fs.existsSync(gatewayState),'gateway startup');
     const pageErrors = [];
-    let mediaConnections = 0, controls = 0;
+    const connections=role=>stderr.split('[BROWSER] '+role+' connected').length-1;
     page.on('pageerror', error => pageErrors.push(error.message));
     page.on('websocket', socket => {
       if (socket.url().endsWith('/media')) mediaConnections++;
@@ -133,14 +133,14 @@ const width = fullHD ? 1920 : 1600, height = fullHD ? 1080 : 900;
     assert.equal(await page.evaluate(()=>showcaseDiagnostics().displayed),true);
     helper.stdin.write('r');
     await page.waitForTimeout(100);
-    assert.equal(mediaConnections, 1);
+    assert.equal(connections('media'), 1);
     helper.stdin.write('tc');
     await page.waitForFunction(time=>showcaseDiagnostics().drawnFrames>time,initialTime,{timeout:15000});
     for (let i = 0; i < 8; i++) {
       helper.stdin.write('r'); await page.waitForTimeout(1500);
     }
-    assert.equal(mediaConnections, 1, 'stable playback must not churn sockets');
-    assert.equal(controls, 1);
+    assert.equal(connections('media'), 1, 'stable playback must not churn sockets');
+    assert.equal(connections('control'), 1);
     assert.equal(await page.locator('#poster').isVisible(), false);
     assert.equal(await page.locator('#notice').isVisible(), false);
     await page.screenshot({path: path.join(work, 'browser.png')});
