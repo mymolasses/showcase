@@ -21,6 +21,11 @@ const codecs = {baseline:'avc1.42002a',main:'avc1.4d002a',high:'avc1.64002a'};
 assert(codecs[profile], 'Unknown AVC test profile');
 const fullHD = profile==='baseline';
 const width = fullHD ? 1920 : 1600, height = fullHD ? 1080 : 900;
+// This suite checks native forwarding/lifecycle, not software-GPU throughput.
+// CI can pace full-resolution fixtures below real-time; the separate Worker
+// browser suite still exercises a 30 fps source and all three AVC profiles.
+const fps = Number(process.env.SHOWCASE_TEST_SOURCE_FPS || 30);
+assert(Number.isInteger(fps) && fps >= 1 && fps <= 60);
 
 (async () => {
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'showcase-browser-e2e-'));
@@ -37,14 +42,14 @@ const width = fullHD ? 1920 : 1600, height = fullHD ? 1080 : 900;
     // Worker rendering must not depend on main-page animation callbacks.
     const waitFor=(fn,arg,options={})=>page.waitForFunction(fn,arg,{polling:100,...options});
     await page.goto(`http://127.0.0.1:${server.address().port}`);
-    const encoded = await page.evaluate(async ({codec,width,height}) => {
+    const encoded = await page.evaluate(async ({codec,width,height,fps}) => {
       if (!window.VideoEncoder) throw Error('Chrome WebCodecs encoder unavailable');
       const frames = []; let description = null, failure = null;
       const encoder = new VideoEncoder({output(chunk, meta) {
         const bytes = new Uint8Array(chunk.byteLength); chunk.copyTo(bytes); frames.push([...bytes]);
         if (meta.decoderConfig?.description) description = [...new Uint8Array(meta.decoderConfig.description)];
       }, error(error) { failure = error.message; }});
-      encoder.configure({codec, width, height, framerate: 30,
+      encoder.configure({codec, width, height, framerate: fps,
         bitrate: 6000000, latencyMode: 'realtime', avc: {format: 'avc'}});
       const canvas = document.createElement('canvas'); canvas.width = width; canvas.height = height;
       const context = canvas.getContext('2d');
@@ -52,13 +57,13 @@ const width = fullHD ? 1920 : 1600, height = fullHD ? 1080 : 900;
         context.fillStyle = '#13254b'; context.fillRect(0, 0, width, height);
         context.fillStyle = '#48cfae'; context.fillRect(i * 24, 300, 300, 480);
         context.fillStyle = '#e43a32'; context.fillRect(20,20,60,60);
-        const frame = new VideoFrame(canvas, {timestamp: Math.round(i * 1e6 / 30), duration: 33333});
-        encoder.encode(frame, {keyFrame: i % 30 === 0}); frame.close();
+        const frame = new VideoFrame(canvas, {timestamp: Math.round(i * 1e6 / fps), duration: Math.round(1e6/fps)});
+        encoder.encode(frame, {keyFrame: i % fps === 0}); frame.close();
       }
       await encoder.flush(); encoder.close();
       if (failure || !description || !frames.length) throw Error(failure || 'No AVC output');
       return {description, frames};
-    },{codec:codecs[profile],width,height});
+    },{codec:codecs[profile],width,height,fps});
     assert.equal(encoded.description[1],{baseline:66,main:77,high:100}[profile],'Encoder must produce the requested AVC profile');
     const record = bytes => { const header = Buffer.alloc(4); header.writeUInt32BE(bytes.length); return Buffer.concat([header, Buffer.from(bytes)]); };
     const fixture = path.join(work, 'avc.bin');

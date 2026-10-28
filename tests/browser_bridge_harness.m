@@ -44,6 +44,8 @@ int main(int argc, char **argv) { @autoreleasepool {
     showcase_browser_config(width, height, config.bytes, config.length);
     printf("READY\n"); fflush(stdout);
     fcntl(STDIN_FILENO, F_SETFL, O_NONBLOCK);
+    unsigned fps = getenv("SHOWCASE_TEST_SOURCE_FPS") ? (unsigned)atoi(getenv("SHOWCASE_TEST_SOURCE_FPS")) : 30;
+    if (fps < 1 || fps > 60) return 9;
     uint64_t sequence = 0; bool active = true, run = true, flowing = true; char timing = 'n';
     while (run) { @autoreleasepool {
         char command[16]; ssize_t n = read(STDIN_FILENO, command, sizeof(command));
@@ -72,10 +74,10 @@ int main(int argc, char **argv) { @autoreleasepool {
                 if (!count || count > frame.length - i) break;
                 key |= (bytes[i] & 31) == 5; i += count;
             }
-            uint64_t time = (5ULL << 32) + sequence * 4294967296ULL / 30;
+            uint64_t time = (5ULL << 32) + sequence * 4294967296ULL / fps;
             showcase_browser_frame(timing == 'z' ? 0 : timing == 'd' ? (5ULL << 32) : time, key, frame.bytes, frame.length); sequence++;
         }
-        usleep(33333);
+        usleep(1000000 / fps);
     } }
     showcase_browser_stop(); return 0;
 } }

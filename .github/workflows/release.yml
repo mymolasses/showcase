@@ -69,6 +69,8 @@ jobs:
           fi
       - name: Validate native services and browser playback
         if: ${{ !inputs.compile_only }}
+        env:
+          SHOWCASE_TEST_SOURCE_FPS: '10'
         shell: bash
         run: |
           set -euo pipefail
