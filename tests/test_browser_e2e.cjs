@@ -24,7 +24,7 @@ const width = fullHD ? 1920 : 1600, height = fullHD ? 1080 : 900;
 
 (async () => {
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'showcase-browser-e2e-'));
-  let browser, server, helper, gateway;
+  let browser, page, server, helper, gateway, output = '', stderr = '';
   const certificate = useTLS ? fixtureTLS(work, domain) : null;
   try {
     require('./native_browser_fixture.cjs')(path.join(work,'bridge'));
@@ -33,7 +33,7 @@ const width = fullHD ? 1920 : 1600, height = fullHD ? 1080 : 900;
     server = http.createServer((_, res) => { res.end('<!doctype html><title>Synthetic AVC fixture</title>'); });
     server.listen(0, '127.0.0.1'); await once(server, 'listening');
     browser = await chromium.launch({executablePath: process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', headless: true, args: ['--enable-unsafe-swiftshader','--use-angle=swiftshader','--no-proxy-server', ...(useTLS ? ['--host-resolver-rules=MAP '+domain+' 127.0.0.1', '--ignore-certificate-errors-spki-list='+certificate.spki] : [])]});
-    const page = await browser.newPage({viewport: {width: 1280, height: 900}});
+    page = await browser.newPage({viewport: {width: 1280, height: 900}});
     await page.goto(`http://127.0.0.1:${server.address().port}`);
     const encoded = await page.evaluate(async ({codec,width,height}) => {
       if (!window.VideoEncoder) throw Error('Chrome WebCodecs encoder unavailable');
@@ -64,7 +64,6 @@ const width = fullHD ? 1920 : 1600, height = fullHD ? 1080 : 900;
     const port = server.address().port;
     await new Promise(resolve => server.close(resolve)); server = null;
     helper = spawn(path.join(work, 'bridge'), [String(port), fixture, `${width}x${height}`], {stdio: ['pipe', 'pipe', 'pipe']});
-    let output = '', stderr = '';
     helper.stdout.on('data', bytes => { output += bytes.toString(); });
     helper.stderr.on('data', bytes => { stderr += bytes.toString(); });
     const until = async (predicate, label, timeout = 10000) => {
@@ -162,6 +161,10 @@ const width = fullHD ? 1920 : 1600, height = fullHD ? 1080 : 900;
     assert.deepEqual(pageErrors, []);
     console.log(`PASS (${useTLS?'HTTPS/WSS':'HTTP/WS'}, ${profile} ${width}x${height}): pixels/crop/orientation, touch, static flush, reconnect, foreground without a new VideoConfig`);
     console.log('Synthetic screenshot:', path.join(work, 'browser.png'));
+  } catch(error) {
+    console.error('Playback diagnostics:',await page?.evaluate(()=>JSON.stringify(window.showcaseDiagnostics?.())).catch(()=> 'page unavailable'));
+    console.error('Bridge stderr:',stderr.slice(-6000),'Bridge output:',output.slice(-2000));
+    throw error;
   } finally {
     if (helper && helper.exitCode === null) { helper.stdin.write('q'); await once(helper, 'exit'); }
     if (gateway && gateway.exitCode === null) { gateway.kill('SIGTERM'); await once(gateway,'exit'); }

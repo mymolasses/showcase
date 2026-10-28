@@ -10,13 +10,16 @@ let stopped = false, initialized = false, waitingKey = true, decoderEpoch = 0;
 let keyAt = -Infinity, lastReport = -Infinity, lastDrawAt = null, lastInputAt = null, lastTimestamp = -1;
 let inputFrames = 0, drawnFrames = 0, droppedFrames = 0, bytes = 0, recoveries = 0;
 let statsTimer, pingTimer, connectionTimer;
-const MAX_DECODE_QUEUE = 4;
+// Wi-Fi/TLS can deliver a healthy burst faster than asynchronous codec work.
+// Bound both outstanding work and its age instead of resetting every fifth
+// packet before the decoder has had a chance to produce its first picture.
+const submitted = new Map(), MAX_DECODE_QUEUE = 24, MAX_QUEUE_AGE_MS = 250;
 function report(force = false) {
   const now = performance.now();
   if (!force && now-lastReport<100) return;
   lastReport=now;
   self.postMessage({type:'stats',stats:{inputFrames,drawnFrames,bytes,droppedFrames,recoveries,waitingKey,
-    decodeQueue:decoder?.decodeQueueSize || 0,lastDrawTimestamp:lastTimestamp,
+    decodeQueue:decoder?.decodeQueueSize || 0,inFlightFrames:submitted.size,lastDrawTimestamp:lastTimestamp,
     lastDrawAgeMs:lastDrawAt===null?null:now-lastDrawAt,lastInputAgeMs:lastInputAt===null?null:now-lastInputAt}});
 }
 function requestKey() {
@@ -27,6 +30,7 @@ function closeDecoder() {
   ++decoderEpoch;
   if (decoder && decoder.state!=='closed') decoder.close();
   decoder=null; waitingKey=true;
+  submitted.clear();
 }
 function stop() {
   if (stopped) return; stopped=true;
@@ -74,6 +78,7 @@ function initGL() {
 function draw(frame,ticket) {
   try {
     if (stopped || ticket!==decoderEpoch) return;
+    submitted.delete(frame.timestamp);
     if (frame.timestamp<=lastTimestamp) { droppedFrames++;return; }
     if (canvas.width!==frame.displayWidth || canvas.height!==frame.displayHeight) {
       canvas.width=frame.displayWidth;canvas.height=frame.displayHeight;gl.viewport(0,0,canvas.width,canvas.height);
@@ -110,11 +115,13 @@ async function configure(next) {
 function feed(packet) {
   if (!decoder || packet.generation!==stream?.generation) return;
   inputFrames++;bytes+=packet.bytes.byteLength;lastInputAt=performance.now();
-  if (decoder.decodeQueueSize>=MAX_DECODE_QUEUE) {
+  const oldest=submitted.values().next().value;
+  if (submitted.size>=MAX_DECODE_QUEUE || (submitted.size>=4 && performance.now()-oldest>MAX_QUEUE_AGE_MS)) {
     // Dropping a delta breaks the reference chain. Reset and wait for IDR.
-    droppedFrames+=decoder.decodeQueueSize;recoveries++;newDecoder();
+    droppedFrames+=submitted.size;recoveries++;newDecoder();
   }
   if (waitingKey && !packet.key) { droppedFrames++;requestKey();report();return; }
+  submitted.set(packet.micros,performance.now());
   decoder.decode(new EncodedVideoChunk({type:packet.key?'key':'delta',timestamp:packet.micros,data:packet.bytes}));
   waitingKey=false;report();
 }

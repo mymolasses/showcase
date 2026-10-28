@@ -74,6 +74,7 @@ jobs:
           set -euo pipefail
           python3 tools/embed_browser.py
           git diff --exit-code -- source/browser_assets.h
+          node tests/test_browser_e2e.cjs
           python3 tests/test_display_profile.py
           python3 tests/test_display_restart.py
           python3 tests/test_control_connect.py
@@ -94,7 +95,6 @@ jobs:
           node tests/test_browser_live.cjs
           node tests/test_browser_display.cjs
           node tests/test_browser_probe.cjs
-          node tests/test_browser_e2e.cjs
           SHOWCASE_TEST_TLS=1 node tests/test_browser_e2e.cjs
           SHOWCASE_TEST_AVC_PROFILE=main node tests/test_browser_e2e.cjs
           SHOWCASE_TEST_AVC_PROFILE=high node tests/test_browser_e2e.cjs
