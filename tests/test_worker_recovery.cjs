@@ -53,5 +53,11 @@ function fixture({secure=true,codec=true,graphics=true}={}){
     const bad=fixture(option);await bad.init();assert(bad.messages.some(m=>m.type==='error'&&m.fatal),'missing capability must produce a fatal diagnostic');
     assert.equal(bad.sockets.length,0,'capability failure must not open a media connection');
   }
+  const accepted=fixture();await accepted.init();await accepted.configure();const codec=accepted.decoders.at(-1);
+  for(let n=0;n<100;n++){
+    codec.decodeQueueSize=0;accepted.message(accepted.frame(n===0,n+1));accepted.poll();
+  }
+  assert.equal(accepted.decoders.length,1,'accepted codec/reference surfaces are not a pending decode queue');
+  assert.equal(codec.inputs.length,100,'do not starve a codec which accepts work before delayed output');accepted.close();
   console.log('PASS: IDR recovery after decoder overflow, stale callbacks, duplicate frames, cleanup and capability failure');
 })().catch(e=>{console.error(e);process.exitCode=1;});

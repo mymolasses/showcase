@@ -13,13 +13,14 @@ let statsTimer, pingTimer, connectionTimer;
 // Wi-Fi/TLS can deliver a healthy burst faster than asynchronous codec work.
 // Bound both outstanding work and its age instead of resetting every fifth
 // packet before the decoder has had a chance to produce its first picture.
-const submitted = new Map(), MAX_DECODE_QUEUE = 24, MAX_QUEUE_AGE_MS = 250;
+let pendingSince = null;
+const MAX_DECODE_QUEUE = 24, MAX_QUEUE_AGE_MS = 250;
 function report(force = false) {
   const now = performance.now();
   if (!force && now-lastReport<100) return;
   lastReport=now;
   self.postMessage({type:'stats',stats:{inputFrames,drawnFrames,bytes,droppedFrames,recoveries,waitingKey,
-    decodeQueue:decoder?.decodeQueueSize || 0,inFlightFrames:submitted.size,lastDrawTimestamp:lastTimestamp,
+    decodeQueue:decoder?.decodeQueueSize || 0,lastDrawTimestamp:lastTimestamp,
     lastDrawAgeMs:lastDrawAt===null?null:now-lastDrawAt,lastInputAgeMs:lastInputAt===null?null:now-lastInputAt}});
 }
 function requestKey() {
@@ -30,7 +31,7 @@ function closeDecoder() {
   ++decoderEpoch;
   if (decoder && decoder.state!=='closed') decoder.close();
   decoder=null; waitingKey=true;
-  submitted.clear();
+  pendingSince=null;
 }
 function stop() {
   if (stopped) return; stopped=true;
@@ -78,7 +79,6 @@ function initGL() {
 function draw(frame,ticket) {
   try {
     if (stopped || ticket!==decoderEpoch) return;
-    submitted.delete(frame.timestamp);
     if (frame.timestamp<=lastTimestamp) { droppedFrames++;return; }
     if (canvas.width!==frame.displayWidth || canvas.height!==frame.displayHeight) {
       canvas.width=frame.displayWidth;canvas.height=frame.displayHeight;gl.viewport(0,0,canvas.width,canvas.height);
@@ -86,7 +86,8 @@ function draw(frame,ticket) {
     if (gl.isContextLost()) throw Error('WebGL 图形上下文已丢失');
     gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,frame);
     gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
-    const error=gl.getError();if(error!==gl.NO_ERROR)throw Error('WebGL 绘制失败：'+error);
+    // Do not call getError/readPixels here: synchronous GPU readback can
+    // serialize every frame. Context loss is handled by its own event.
     lastTimestamp=frame.timestamp;lastDrawAt=performance.now();drawnFrames++;report(drawnFrames===1);
   } catch(error) { fail(error.message); }
   finally { frame.close(); }
@@ -96,6 +97,7 @@ function newDecoder() {
   decoder=new VideoDecoder({output:frame=>draw(frame,ticket),error:error=>{
     if(ticket===decoderEpoch)fail('WebCodecs 解码失败：'+error.message);
   }});
+  decoder.ondequeue=()=>{if(ticket===decoderEpoch && decoder.decodeQueueSize===0)pendingSince=null;};
   decoder.configure(decoderConfig);waitingKey=true;requestKey();
 }
 async function configure(next) {
@@ -115,13 +117,17 @@ async function configure(next) {
 function feed(packet) {
   if (!decoder || packet.generation!==stream?.generation) return;
   inputFrames++;bytes+=packet.bytes.byteLength;lastInputAt=performance.now();
-  const oldest=submitted.values().next().value;
-  if (submitted.size>=MAX_DECODE_QUEUE || (submitted.size>=4 && performance.now()-oldest>MAX_QUEUE_AGE_MS)) {
+  const queued=decoder.decodeQueueSize;
+  if(queued===0)pendingSince=null;
+  // Accepted codec work may retain reference/reorder surfaces. It is not
+  // pending decode work; resetting based on those surfaces can starve the
+  // decoder before it ever outputs its next picture.
+  if (queued>=MAX_DECODE_QUEUE || (queued>=4 && pendingSince!==null && performance.now()-pendingSince>MAX_QUEUE_AGE_MS)) {
     // Dropping a delta breaks the reference chain. Reset and wait for IDR.
-    droppedFrames+=submitted.size;recoveries++;newDecoder();
+    droppedFrames+=queued;recoveries++;newDecoder();
   }
   if (waitingKey && !packet.key) { droppedFrames++;requestKey();report();return; }
-  submitted.set(packet.micros,performance.now());
+  if(pendingSince===null)pendingSince=performance.now();
   decoder.decode(new EncodedVideoChunk({type:packet.key?'key':'delta',timestamp:packet.micros,data:packet.bytes}));
   waitingKey=false;report();
 }
