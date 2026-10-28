@@ -1,9 +1,10 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later. No external scripts/services. */
 (() => {
   'use strict';
-  const $=id=>document.getElementById(id), surface=$('surface'), poster=$('poster'), display=$('display');
+  const $=id=>document.getElementById(id), surface=$('surface'), display=$('display');
   const {mapPoint,displaySize}=ShowcaseProtocol, backends=ShowcaseRenderers;
   let desired=true, active=false, displayed=false, fill=false, config=null, renderer=null, control=null;
+  let retainedFrame=false;
   let outputMode='auto',outputInitialized=false,selectingOutput=false,outputTimer=null,lastOutputSent=-Infinity,viewport={};
   let epoch=0, retry=0, reconnectTimer=null, socketTimer=null, startupTimer=null, statusBusy=false, pointer=null;
   let pendingMove=null, moveFrame=null, lastKeyRequest=-Infinity, failures=[], server=null;
@@ -71,13 +72,8 @@
     const old=pointer;pointer=null;
     if(old!==null) { if(surface.hasPointerCapture(old))surface.releasePointerCapture(old);if(notify)send({type:'release'}); }
   }
-  function snapshot() {
-    const source=renderer?.snapshotSource();
-    if(!source?.width || !source?.height || !displayed)return;
-    try { poster.width=source.width;poster.height=source.height;poster.getContext('2d').drawImage(source,0,0);poster.hidden=false; } catch(_) {}
-  }
   function resetRenderer() {
-    release();snapshot();renderer?.disconnect();displayed=false;
+    release();retainedFrame ||= displayed;renderer?.disconnect();displayed=false;
     clearTimeout(startupTimer);startupTimer=null;metrics.lastDrawAt=null;
   }
   function closeSockets() {
@@ -96,7 +92,7 @@
     metrics.lastFailure={reason,renderer:renderer?.stats() ?? null,receiver:server};
     const now=performance.now();failures=failures.filter(t=>now-t<30000);failures.push(now);
     if(fatal || failures.length>=4) {
-      desired=false;closeSockets();renderer?.close();renderer=null;display.replaceChildren();notice(reason+'；请检查 HTTPS、浏览器能力或复制诊断后重连');state(reason);return;
+      desired=false;closeSockets();renderer?.close();renderer=null;display.replaceChildren();retainedFrame=false;notice(reason+'；请检查 HTTPS、浏览器能力或复制诊断后重连');state(reason);return;
     }
     scheduleReconnect(reason);
   }
@@ -128,13 +124,13 @@
           if(current!==epoch)return;release();config=next;active=true;displayed=false;clearTimeout(startupTimer);
           startupTimer=setTimeout(()=>{if(current===epoch && !displayed)recover('等待第一帧超时');},15000);
         },
-        onReset(){if(current!==epoch)return;release();snapshot();config=null;active=false;displayed=false;
+        onReset(){if(current!==epoch)return;release();retainedFrame ||= displayed;config=null;active=false;displayed=false;
           clearTimeout(startupTimer);startupTimer=null;notice('等待新的 CarPlay 会话…');},
         onProgress(delta){if(current!==epoch)return;metrics.received+=Math.max(0,delta.received);metrics.bytes+=Math.max(0,delta.bytes);metrics.drawn+=Math.max(0,delta.drawn);},
         onFrame(){
           if(current!==epoch || !config)return;
-          const first=!displayed;displayed=true;retry=0;metrics.lastDrawAt=performance.now();
-          if(first || !$('notice').hidden){poster.hidden=true;notice('');clearTimeout(startupTimer);startupTimer=null;}
+          const first=!displayed;displayed=true;retainedFrame=false;retry=0;metrics.lastDrawAt=performance.now();
+          if(first || !$('notice').hidden){notice('');clearTimeout(startupTimer);startupTimer=null;}
           state(`CarPlay · ${config.width} × ${config.height} · ${backends.label}`);
         },
         onError(reason,fatal){if(current===epoch)setTimeout(()=>{if(current===epoch)recover(reason,fatal);},0);}
@@ -191,7 +187,7 @@
       renderer:'webcodecs-worker',rendererLabel:backends.label,lastFailure:metrics.lastFailure,
       resolution:config?`${config.width} × ${config.height}`:'等待视频',outputMode,viewport,outputTarget:outputTarget(),displayFit:fill?'cover':'contain',...rates,...renderer?.stats(),
       receivedFrames:metrics.received,recoveryCount:metrics.recoveries,reconnectCount:metrics.reconnects,lastReason:metrics.lastReason,
-      documentVisibility:document.visibilityState || (document.hidden?'hidden':'visible'),posterVisible:!poster.hidden,displayed,
+      documentVisibility:document.visibilityState || (document.hidden?'hidden':'visible'),retainedFrame,displayed,
       controlBufferedBytes:control?.bufferedAmount ?? 0,inputOwner:server?.inputOwner ?? 'none',sourceFrameAgeMs:server?.frameAgeMs ?? null,
       capabilities:{secureContext:!!window.isSecureContext,worker:!!window.Worker,offscreenCanvas:!!window.OffscreenCanvas},
       receiver:server};

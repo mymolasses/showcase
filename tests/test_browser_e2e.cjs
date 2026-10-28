@@ -156,26 +156,25 @@ assert(Number.isInteger(fps) && fps >= 1 && fps <= 60);
     }
     assert.equal(connections('media'), 1, 'stable playback must not churn sockets');
     assert.equal(connections('control'), 1);
-    assert.equal(await page.locator('#poster').isVisible(), false);
+    assert.equal(await evaluate(()=>showcaseDiagnostics().retainedFrame), false);
     assert.equal(await page.locator('#notice').isVisible(), false);
-    // Capture the actual decoded canvas rather than waiting for the headless
-    // macOS page compositor to produce a full-window screenshot.
-    progress('decoded canvas readback');
-    const png=await evaluate(()=>{const source=document.querySelector('#display canvas');const c=document.createElement('canvas');c.width=source.width;c.height=source.height;c.getContext('2d').drawImage(source,0,0);return c.toDataURL('image/png');});
-    fs.writeFileSync(path.join(work,'browser.png'),Buffer.from(png.split(',')[1],'base64'));
     progress('manual reconnect');
     await page.click('#reconnect',{force:true});
     await waitFor(()=>showcaseDiagnostics().displayed && showcaseDiagnostics().drawnFrames>2,null,{timeout:20000});
+    // Sample actual pixels after draining GPU work. Full-canvas readback during
+    // live software rendering serializes the GPU and does not test playback.
+    helper.stdin.write('s');await page.waitForTimeout(700);progress('decoded pixel checks');
     const color=await evaluate(()=>{const source=document.querySelector('#display canvas');const c=document.createElement('canvas');c.width=c.height=1;const ctx=c.getContext('2d');ctx.drawImage(source,10,source.height-10,1,1,0,0,1,1);return [...ctx.getImageData(0,0,1,1).data];});
     assert(color[2]>color[0] && color[2]>40 && color[3]===255,'decoded fixture pixels: '+color);
     const corner=await evaluate(()=>{const source=document.querySelector('#display canvas');const c=document.createElement('canvas');c.width=c.height=1;const ctx=c.getContext('2d');ctx.drawImage(source,source.width/64,source.height/36,1,1,0,0,1,1);return [...ctx.getImageData(0,0,1,1).data];});
     assert(corner[0]>corner[2]+50,'red marker must remain at top-left: '+corner);
+    helper.stdin.write('c');
     assert.equal(await page.locator('video,img').count(),0);
     // Actual service loss: retain the last image, back off, recover new sockets.
     progress('native service loss and restart');
     helper.stdin.write('q'); await bounded(once(helper, 'exit'),'native service exit');
     await waitFor(() => document.querySelector('#state').textContent.includes('重试'));
-    assert.equal(await page.locator('#poster').isVisible(), true);
+    assert.equal(await evaluate(()=>showcaseDiagnostics().retainedFrame), true);
     helper = spawn(path.join(work, 'bridge'), [String(port), fixture, `${width}x${height}`], {stdio: ['pipe', 'pipe', 'pipe']});
     helper.stdout.on('data', bytes => { output += bytes.toString(); });
     helper.stderr.on('data', bytes => { stderr += bytes.toString(); });
@@ -187,7 +186,6 @@ assert(Number.isInteger(fps) && fps >= 1 && fps <= 60);
     await waitFor(()=>showcaseDiagnostics().displayed && showcaseDiagnostics().drawnFrames>2,null,{timeout:20000});
     assert.deepEqual(pageErrors, []);
     console.log(`PASS (${useTLS?'HTTPS/WSS':'HTTP/WS'}, ${profile} ${width}x${height}): pixels/crop/orientation, touch, static flush, reconnect, foreground without a new VideoConfig`);
-    console.log('Synthetic decoded canvas:', path.join(work, 'browser.png'));
   } catch(error) {
     console.error('Playback diagnostics:',await bounded(page?.evaluate(()=>JSON.stringify(window.showcaseDiagnostics?.())),'diagnostics',5000).catch(()=> 'page unavailable'));
     console.error('Bridge stderr:',stderr.slice(-6000),'Bridge output:',output.slice(-2000));
@@ -198,7 +196,6 @@ assert(Number.isInteger(fps) && fps >= 1 && fps <= 60);
     if (server) server.close();
     if (browser) await bounded(browser.close(),'Chrome cleanup',10000).catch(()=>{});
     clearTimeout(watchdog);
-    // Keep only the synthetic screenshot as visual evidence.
-    for (const name of fs.readdirSync(work)) if(name !== 'browser.png') fs.rmSync(path.join(work, name), {recursive:true,force: true});
+    for (const name of fs.readdirSync(work)) fs.rmSync(path.join(work, name), {recursive:true,force: true});
   }
 })().catch(error => { console.error(error); process.exitCode = 1; });

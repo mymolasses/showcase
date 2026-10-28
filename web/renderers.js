@@ -50,7 +50,6 @@
       disconnect() { if(!closed)worker.postMessage({type:'disconnect',session:++session}); },
       stats() { return {...counters,renderer:'webcodecs-worker',lastDrawAgeMs:lastDrawAt===null?null:performance.now()-lastDrawAt,
         lastInputAgeMs:lastInputAt===null?null:performance.now()-lastInputAt}; },
-      snapshotSource: () => canvas,
       close() {
         if (closed) return; closed=true;
         if(!worker)return;

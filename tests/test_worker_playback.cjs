@@ -96,7 +96,9 @@ function wire(data){
       await ready();
       assert.equal(workers,priorWorkers+1,'recovery reuses the same Worker and GPU context');
       await page.click('#disconnect');await sleep(150);
-      assert.equal(await page.locator('#poster').isVisible(),true,'disconnect retains final image');
+      assert.equal(await page.evaluate(()=>showcaseDiagnostics().retainedFrame),true,'disconnect retains final image');
+      const retained=await page.evaluate(()=>{const c=document.createElement('canvas');c.width=c.height=1;const ctx=c.getContext('2d');ctx.drawImage(document.querySelector('#display canvas'),10,10,1,1,0,0,1,1);return [...ctx.getImageData(0,0,1,1).data];});
+      assert(retained[0]>retained[2]+100 && retained[3]===255,'the original GPU canvas retains real pixels after disconnect');
       clearInterval(timer);timer=null;
       console.log('PASS: '+(tls?'HTTPS/WSS':'loopback HTTP/WS')+' '+profile+' real H.264, Worker/WebGL pixels, static screen, touch/hold, reconnect and retained image');
       await page.goto(base+'/status');await sleep(200);

@@ -22,7 +22,7 @@
 网络接收、解析、解码和 WebGL 绘制全部在 Worker，主线程仅处理界面和触摸。
 解码使用 optimizeForLatency。允许短时网络突发；待解码输入达到 24 个，或至少四个尚未被解码器接收的请求持续积压超过 250ms 时，重置参考链并等待 IDR；不随意丢弃参考帧后继续解码。
 服务端队列最多八个待发包，仍完整发送已开始写出的 WS 帧，避免截断协议。
-WebGL 保留绘图缓冲以支持静态导航和断线截图。实现保留本项目的 AVCC 配置及消息封装，没有复制第三方播放器代码。
+WebGL 保留绘图缓冲以支持静态导航和断线期间的最后一帧，主线程不读取或复制 GPU 画布。实现保留本项目的 AVCC 配置及消息封装，没有复制第三方播放器代码。
 
 诊断中的 inputFrames、drawnFrames、decodeQueue、droppedFrames、recoveries、lastDrawAgeMs 区分传输、解码和绘制。
 帧率仅由实际 WebGL 绘制增加，定时器和 WebSocket connected 状态不计为成功出图。
