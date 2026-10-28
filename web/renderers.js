@@ -13,7 +13,7 @@
     const reason = unsupported(); if (reason) throw Error(reason);
     const canvas = document.createElement('canvas');
     canvas.width = canvas.height = 1; options.container.replaceChildren(canvas);
-    let worker = null, closed = false, closeTimer = null, lastDrawAt = null, lastInputAt = null;
+    let worker = null, closed = false, closeTimer = null, lastDrawAt = null, lastInputAt = null, session = 0;
     const terminate=()=>{clearTimeout(closeTimer);worker?.terminate();worker=null;};
     let counters = {inputFrames:0,drawnFrames:0,bytes:0,droppedFrames:0,waitingKey:true,decodeQueue:0};
     try {
@@ -21,7 +21,7 @@
       worker = new Worker('/video-worker.js');
       worker.onmessage = ({data}) => {
         if (data.type === 'closed') { terminate();return; }
-        if (closed) return;
+        if (closed || data.session!==session) return;
         if (data.type === 'error') { options.onError(data.message, data.fatal); return; }
         if (data.type === 'open') options.onOpen();
         if (data.type === 'config') options.onConfig(data.config);
@@ -39,9 +39,15 @@
       };
       worker.onerror = event => { if (!closed) { event.preventDefault(); options.onError('视频 Worker 启动失败：'+event.message,true); } };
       worker.onmessageerror = () => { if (!closed) options.onError('视频 Worker 消息损坏',true); };
-      worker.postMessage({type:'init',canvas:offscreen,url:options.url},[offscreen]);
+      worker.postMessage({type:'init',canvas:offscreen,url:options.url,session:++session},[offscreen]);
     } catch(error) { worker?.terminate(); throw error; }
     return {
+      connect(next) {
+        options=next;lastDrawAt=lastInputAt=null;
+        counters={inputFrames:0,drawnFrames:0,bytes:0,droppedFrames:0,waitingKey:true,decodeQueue:0};
+        worker.postMessage({type:'init',url:options.url,session:++session});
+      },
+      disconnect() { if(!closed)worker.postMessage({type:'disconnect',session:++session}); },
       stats() { return {...counters,renderer:'webcodecs-worker',lastDrawAgeMs:lastDrawAt===null?null:performance.now()-lastDrawAt,
         lastInputAgeMs:lastInputAt===null?null:performance.now()-lastInputAt}; },
       snapshotSource: () => canvas,

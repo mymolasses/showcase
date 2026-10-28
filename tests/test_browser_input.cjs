@@ -31,7 +31,7 @@ function fixture(connectReady = 1) {
     getElementById:element, querySelector:()=>video, body:{classList:{toggle(){}}}, hidden:false});
   const initial = new Socket();
   const context = {window,document,WebSocket:Socket,location:{protocol:'http:',host:'fixture.test:8080'},
-    ShowcaseProtocol:require('../web/protocol.js'),ShowcaseRenderers:{label:'WebCodecs',unsupported:()=>null,create:()=>({close(){},stats:()=>({}),snapshotSource:()=>null})},
+    ShowcaseProtocol:require('../web/protocol.js'),ShowcaseRenderers:{label:'WebCodecs',unsupported:()=>null,create:()=>({connect(){},disconnect(){},close(){},stats:()=>({}),snapshotSource:()=>null})},
     performance:{now:()=>1000}, AbortController, fetch:async()=>({ok:true,json:async()=>({active:true,configured:true,viewers:0,controllers:0})}),
     setTimeout:(fn,delay)=>{timers.set(++ident,{fn,delay});return ident;},clearTimeout:id=>timers.delete(id),
     setInterval:(fn,delay)=>{intervals.set(++ident,{fn,delay});return ident;},clearInterval:id=>intervals.delete(id),

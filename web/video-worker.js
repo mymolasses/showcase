@@ -7,6 +7,8 @@ importScripts('/protocol.js');
 const {parsePacket} = ShowcaseProtocol;
 let canvas, gl, program, texture, vertexBuffer, uvBuffer, socket, decoder, stream, decoderConfig;
 let stopped = false, initialized = false, waitingKey = true, decoderEpoch = 0;
+let session = 0;
+const emit = message => self.postMessage({...message,session});
 let keyAt = -Infinity, lastReport = -Infinity, lastDrawAt = null, lastInputAt = null, lastTimestamp = -1;
 let inputFrames = 0, drawnFrames = 0, droppedFrames = 0, bytes = 0, recoveries = 0;
 let statsTimer, pingTimer, connectionTimer;
@@ -19,13 +21,13 @@ function report(force = false) {
   const now = performance.now();
   if (!force && now-lastReport<100) return;
   lastReport=now;
-  self.postMessage({type:'stats',stats:{inputFrames,drawnFrames,bytes,droppedFrames,recoveries,waitingKey,
+  emit({type:'stats',stats:{inputFrames,drawnFrames,bytes,droppedFrames,recoveries,waitingKey,
     decodeQueue:decoder?.decodeQueueSize || 0,lastDrawTimestamp:lastTimestamp,
     lastDrawAgeMs:lastDrawAt===null?null:now-lastDrawAt,lastInputAgeMs:lastInputAt===null?null:now-lastInputAt}});
 }
 function requestKey() {
   if (performance.now()-keyAt<1000) return;
-  keyAt=performance.now(); self.postMessage({type:'keyframe'});
+  keyAt=performance.now(); emit({type:'keyframe'});
 }
 function closeDecoder() {
   ++decoderEpoch;
@@ -33,20 +35,22 @@ function closeDecoder() {
   decoder=null; waitingKey=true;
   pendingSince=null;
 }
-function stop() {
-  if (stopped) return; stopped=true;
+function disconnect() {
   clearInterval(statsTimer);clearInterval(pingTimer);clearTimeout(connectionTimer);
-  if (socket) { socket.onclose=socket.onerror=socket.onmessage=null; socket.close(); socket=null; }
-  closeDecoder();
+  if (socket) { socket.onopen=socket.onclose=socket.onerror=socket.onmessage=null; socket.close(); socket=null; }
+  closeDecoder();stream=null;decoderConfig=null;
+}
+function stop() {
+  if (stopped) return; stopped=true;disconnect();
   if (gl) {
     gl.deleteTexture(texture);gl.deleteBuffer(vertexBuffer);gl.deleteBuffer(uvBuffer);gl.deleteProgram(program);
     gl.getExtension('WEBGL_lose_context')?.loseContext();
   }
-  self.postMessage({type:'closed'});self.close?.();
+  emit({type:'closed'});self.close?.();
 }
 function fail(message,fatal=false) {
   if (stopped) return;
-  self.postMessage({type:'error',message,fatal});stop();
+  emit({type:'error',message,fatal});disconnect();
 }
 function shader(type,source) {
   const item=gl.createShader(type);gl.shaderSource(item,source);gl.compileShader(item);
@@ -116,7 +120,7 @@ async function configure(next) {
   const support=await VideoDecoder.isConfigSupported(decoderConfig);
   if (stopped || current!==stream) return;
   if (!support.supported) { fail('浏览器不支持当前 H.264 配置：'+decoderConfig.codec,true);return; }
-  newDecoder();self.postMessage({type:'config',config:{width:next.width,height:next.height,generation:next.generation}});report(true);
+  newDecoder();emit({type:'config',config:{width:next.width,height:next.height,generation:next.generation}});report(true);
 }
 function feed(packet) {
   if (!decoder || packet.generation!==stream?.generation) return;
@@ -136,32 +140,38 @@ function feed(packet) {
   waitingKey=false;report();
 }
 async function init(message) {
-  if (initialized) return;initialized=true;
+  if (stopped) return;
+  disconnect();session=message.session || 0;
   if (!self.isSecureContext) { fail('视频解码需要可信 HTTPS',true);return; }
   if (!self.VideoDecoder) { fail('浏览器 Worker 未提供 WebCodecs VideoDecoder',true);return; }
   const url=new URL(message.url);
   const local=['localhost','127.0.0.1','[::1]'].includes(self.location.hostname);
   if (url.host!==self.location.host || url.pathname!=='/media' || (url.protocol!=='wss:' && !(local && url.protocol==='ws:')))
     throw Error('视频必须使用同源 WSS 连接');
-  canvas=message.canvas;initGL();
+  if (!initialized) { canvas=message.canvas;initGL();initialized=true; }
+  else if(gl.isContextLost())throw Error('WebGL 上下文已丢失，请刷新页面');
+  inputFrames=drawnFrames=droppedFrames=bytes=recoveries=0;
+  lastDrawAt=lastInputAt=null;lastTimestamp=-1;keyAt=lastReport=-Infinity;
+  const ticket=session;
   socket=new WebSocket(url.href);socket.binaryType='arraybuffer';
   connectionTimer=setTimeout(()=>fail('视频连接超时'),8000);
-  socket.onopen=()=>{clearTimeout(connectionTimer);self.postMessage({type:'open'});};
+  socket.onopen=()=>{if(ticket!==session)return;clearTimeout(connectionTimer);emit({type:'open'});};
   socket.onmessage=({data})=>{
-    if (stopped || !(data instanceof ArrayBuffer)) return;
+    if (stopped || ticket!==session || !(data instanceof ArrayBuffer)) return;
     try {
       const packet=parsePacket(data);
-      if(packet.type==='config')configure(packet.config).catch(error=>fail(error.message));
-      else if(packet.type==='reset') { closeDecoder();stream=null;lastDrawAt=null;lastTimestamp=-1;self.postMessage({type:'reset'});report(true); }
+      if(packet.type==='config')configure(packet.config).catch(error=>{if(ticket===session)fail(error.message);});
+      else if(packet.type==='reset') { closeDecoder();stream=null;lastDrawAt=null;lastTimestamp=-1;emit({type:'reset'});report(true); }
       else feed(packet);
     } catch(error) { fail(error.message); }
   };
-  socket.onclose=event=>fail('视频连接中断 ('+event.code+')');
-  socket.onerror=()=>fail('WSS 视频连接失败，请检查 HTTPS 证书及网络');
+  socket.onclose=event=>{if(ticket===session)fail('视频连接中断 ('+event.code+')');};
+  socket.onerror=()=>{if(ticket===session)fail('WSS 视频连接失败，请检查 HTTPS 证书及网络');};
   statsTimer=setInterval(()=>{if(waitingKey&&stream)requestKey();report(true);},500);
   pingTimer=setInterval(()=>{if(socket?.readyState===WebSocket.OPEN)socket.send('{"type":"ping"}');},2000);
 }
 self.onmessage=({data})=>{
   if (data.type==='init') init(data).catch(error=>fail(error.message,true));
+  else if(data.type==='disconnect') { disconnect();session=data.session; }
   else if(data.type==='close')stop();
 };

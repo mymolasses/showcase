@@ -77,7 +77,7 @@
     try { poster.width=source.width;poster.height=source.height;poster.getContext('2d').drawImage(source,0,0);poster.hidden=false; } catch(_) {}
   }
   function resetRenderer() {
-    release();snapshot();renderer?.close();renderer=null;display.replaceChildren();displayed=false;
+    release();snapshot();renderer?.disconnect();displayed=false;
     clearTimeout(startupTimer);startupTimer=null;metrics.lastDrawAt=null;
   }
   function closeSockets() {
@@ -96,7 +96,7 @@
     metrics.lastFailure={reason,renderer:renderer?.stats() ?? null,receiver:server};
     const now=performance.now();failures=failures.filter(t=>now-t<30000);failures.push(now);
     if(fatal || failures.length>=4) {
-      desired=false;closeSockets();notice(reason+'；请检查 HTTPS、浏览器能力或复制诊断后重连');state(reason);return;
+      desired=false;closeSockets();renderer?.close();renderer=null;display.replaceChildren();notice(reason+'；请检查 HTTPS、浏览器能力或复制诊断后重连');state(reason);return;
     }
     scheduleReconnect(reason);
   }
@@ -122,7 +122,7 @@
     control.onclose=event=>{if(current===epoch)scheduleReconnect(`控制连接中断 (${event.code})`);};
     control.onerror=()=>{};
     try {
-      renderer=backends.create({container:display,url:endpoint+'/media',requestKey,
+      const options={container:display,url:endpoint+'/media',requestKey,
         onOpen(){if(current!==epoch)return;mediaReady=true;opened();},
         onConfig(next){
           if(current!==epoch)return;release();config=next;active=true;displayed=false;clearTimeout(startupTimer);
@@ -138,7 +138,8 @@
           state(`CarPlay · ${config.width} × ${config.height} · ${backends.label}`);
         },
         onError(reason,fatal){if(current===epoch)setTimeout(()=>{if(current===epoch)recover(reason,fatal);},0);}
-      });
+      };
+      if(renderer)renderer.connect(options);else renderer=backends.create(options);
     } catch(error) { recover(error.message,true);return; }
     socketTimer=setTimeout(()=>{if(current===epoch)scheduleReconnect('视频或控制连接超时');},10000);
   }
@@ -164,7 +165,7 @@
   window.addEventListener('blur',()=>release());window.addEventListener('resize',resized);
   window.visualViewport?.addEventListener('resize',resized);
   document.addEventListener('fullscreenchange',resized);
-  window.addEventListener('pagehide',closeSockets);window.addEventListener('pageshow',event=>{if(event.persisted && desired)connect();});
+  window.addEventListener('pagehide',()=>{closeSockets();renderer?.close();renderer=null;});window.addEventListener('pageshow',event=>{if(event.persisted && desired)connect();});
   document.addEventListener('visibilitychange',()=>{if(document.hidden)closeSockets();else if(desired)connect();});
   setInterval(()=>{if(pointer!==null && config)send({type:'hold',generation:config.generation});},200);
   setInterval(()=>{send({type:'ping'});if(config && renderer?.stats().waitingKey)requestKey();},2000);

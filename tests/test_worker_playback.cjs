@@ -55,7 +55,7 @@ function wire(data){
     const args=['--enable-unsafe-swiftshader','--use-angle=swiftshader','--no-proxy-server','--host-resolver-rules=MAP insecure.showcase.test 127.0.0.1'];
     if(spki)args.push('--ignore-certificate-errors-spki-list='+spki);
     browser=await chromium.launch({executablePath:process.env.CHROME||undefined,headless:true,args});
-    const page=await browser.newPage({viewport:{width:1000,height:800}});
+    const page=await browser.newPage({viewport:{width:1000,height:800}});let workers=0;page.on('worker',()=>workers++);
     const base=`${tls?'https':'http'}://127.0.0.1:${port}`;await page.goto(base+'/status');
     for(const profile of ['baseline','main','high']){
       const encoded=await page.evaluate(async profile=>{
@@ -75,7 +75,7 @@ function wire(data){
         for(const s of media)s.write(wire(Buffer.concat([h,Buffer.from(f.bytes)])));
       },33);
       if(profile==='baseline')page.on('pageerror',e=>pageErrors.push(e.message));
-      await page.goto(base);
+      const priorWorkers=workers;await page.goto(base);
       const ready=()=>page.waitForFunction(()=>window.showcaseDiagnostics?.().displayed&&showcaseDiagnostics().drawnFrames>5,null,{timeout:15000});
       await ready();
       assert.equal(await page.locator('video,img,#renderer').count(),0);
@@ -90,8 +90,11 @@ function wire(data){
       await page.mouse.click(500,400);await sleep(100);assert(touches.some(m=>m.phase===0&&m.x===320&&m.y===180),'touch uses source coordinates');
       await page.mouse.move(500,400);await page.mouse.down();await sleep(900);assert(touches.some(m=>m.type==='hold'));await page.evaluate(()=>window.dispatchEvent(new Event('blur')));await page.mouse.up();
       await page.click('#menu');await page.click('#reconnect');await ready();
-      for(const s of media)s.destroy();await ready();
-      await page.waitForFunction(()=>showcaseDiagnostics().reconnectCount>0);
+      const reconnected=mediaConnections;
+      for(const s of media)s.destroy();
+      const end=Date.now()+15000;while(mediaConnections===reconnected){if(Date.now()>end)throw Error('media connection did not recover');await sleep(50);}
+      await ready();
+      assert.equal(workers,priorWorkers+1,'recovery reuses the same Worker and GPU context');
       await page.click('#disconnect');await sleep(150);
       assert.equal(await page.locator('#poster').isVisible(),true,'disconnect retains final image');
       clearInterval(timer);timer=null;

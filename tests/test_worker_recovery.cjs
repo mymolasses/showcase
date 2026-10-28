@@ -2,7 +2,7 @@
 const assert=require('node:assert/strict'),vm=require('node:vm'),fs=require('node:fs');
 const protocol=require('../web/protocol.js');
 function fixture({secure=true,codec=true,graphics=true}={}){
-  let time=0,closedFrames=0,draws=0;const messages=[],decoders=[],sockets=[],intervals=[];
+  let time=0,closedFrames=0,draws=0,contexts=0;const messages=[],decoders=[],sockets=[],intervals=[];
   const gl=new Proxy({NO_ERROR:0,COMPILE_STATUS:1,LINK_STATUS:2,getShaderParameter:()=>true,getProgramParameter:()=>true,
     createShader:()=>({}),createProgram:()=>({}),createBuffer:()=>({}),createTexture:()=>({}),getAttribLocation:()=>0,
     getUniformLocation:()=>({}),getError:()=>0,isContextLost:()=>false,drawArrays(){draws++;}},
@@ -25,16 +25,17 @@ function fixture({secure=true,codec=true,graphics=true}={}){
     performance:{now:()=>time},EncodedVideoChunk:class{constructor(x){Object.assign(this,x);}},
     setTimeout:()=>1,clearTimeout(){},setInterval:fn=>{intervals.push(fn);return 1;},clearInterval(){}};
   vm.runInNewContext(fs.readFileSync(require.resolve('../web/video-worker.js'),'utf8'),context);
-  const canvas={width:1,height:1,addEventListener(){},getContext:()=>graphics?gl:null};
+  const canvas={width:1,height:1,addEventListener(){},getContext:()=>{contexts++;return graphics?gl:null;}};
   const config=(gen=7)=>{const b=Buffer.alloc(9);b[0]=1;b.writeUInt32BE(gen,1);b.writeUInt16BE(640,5);b.writeUInt16BE(360,7);return Buffer.concat([b,Buffer.from('0142001effe100046742001e01000268ce','hex')]);};
   const frame=(key,ts,gen=7)=>{const h=Buffer.alloc(14);h[0]=2;h.writeUInt32BE(gen,1);h[5]=+key;h.writeBigUInt64BE(BigInt(ts),6);return Buffer.concat([h,Buffer.from(key?'0000000265b8':'0000000241b8','hex')]);};
   const message=b=>sockets.at(-1).onmessage({data:b.buffer.slice(b.byteOffset,b.byteOffset+b.length)});
   return{messages,decoders,sockets,config,frame,message,
     async init(){self.onmessage({data:{type:'init',canvas,url:'ws://localhost:8080/media'}});await new Promise(setImmediate);sockets.at(-1)?.onopen();},
+    async reconnect(){self.onmessage({data:{type:'disconnect',session:1}});self.onmessage({data:{type:'init',url:'ws://localhost:8080/media',session:2}});await new Promise(setImmediate);sockets.at(-1)?.onopen();},
     async configure(gen=7){message(config(gen));await new Promise(setImmediate);},
     output(decoder,timestamp){decoder.options.output({timestamp,displayWidth:640,displayHeight:360,close(){closedFrames++;}});},
     poll(){time+=1000;for(const fn of intervals)fn();},
-    close(){self.onmessage({data:{type:'close'}});},stats:()=>({draws,closedFrames})};
+    close(){self.onmessage({data:{type:'close'}});},stats:()=>({draws,closedFrames,contexts})};
 }
 (async()=>{
   const f=fixture();await f.init();await f.configure();const first=f.decoders.at(-1);
@@ -59,5 +60,11 @@ function fixture({secure=true,codec=true,graphics=true}={}){
   }
   assert.equal(accepted.decoders.length,1,'accepted codec/reference surfaces are not a pending decode queue');
   assert.equal(codec.inputs.length,100,'do not starve a codec which accepts work before delayed output');accepted.close();
+  const reused=fixture();await reused.init();await reused.configure();const old=reused.decoders.at(-1),oldSocket=reused.sockets.at(-1);
+  reused.message(reused.frame(true,1));reused.output(old,1);
+  await reused.reconnect();assert.equal(oldSocket.readyState,3);assert.equal(old.state,'closed');assert.equal(reused.stats().contexts,1,'transport reconnect must retain its Worker GPU context');
+  await reused.configure();reused.output(old,2);assert.equal(reused.stats().draws,1,'late frames from a previous connection must be closed');
+  reused.message(reused.frame(true,1));reused.output(reused.decoders.at(-1),1);
+  assert.equal(reused.messages.at(-1).session,2);assert.equal(reused.messages.at(-1).stats.drawnFrames,1,'new connection resets counters and timestamps');reused.close();
   console.log('PASS: IDR recovery after decoder overflow, stale callbacks, duplicate frames, cleanup and capability failure');
 })().catch(e=>{console.error(e);process.exitCode=1;});
