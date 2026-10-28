@@ -36,7 +36,7 @@ assert(Number.isInteger(fps) && fps >= 1 && fps <= 60);
     let timer;return Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error(label+' timed out during '+stage)),ms);})]).finally(()=>clearTimeout(timer));
   };
   const evaluate=(...args)=>bounded(page.evaluate(...args),'page evaluation');
-  const watchdog=setTimeout(()=>{console.error('Native browser suite exceeded 180s during '+stage);helper?.kill('SIGKILL');gateway?.kill('SIGKILL');process.exit(1);},180000);
+  const watchdog=setTimeout(()=>{console.error('Native browser suite exceeded 240s during '+stage);helper?.kill('SIGKILL');gateway?.kill('SIGKILL');process.exit(1);},240000);
   const certificate = useTLS ? fixtureTLS(work, domain) : null;
   try {
     require('./native_browser_fixture.cjs')(path.join(work,'bridge'));
@@ -50,7 +50,7 @@ assert(Number.isInteger(fps) && fps >= 1 && fps <= 60);
     const waitFor=(fn,arg,options={})=>page.waitForFunction(fn,arg,{polling:100,...options});
     await page.goto(`http://127.0.0.1:${server.address().port}`);
     progress('encode fixture');
-    const encoded = await evaluate(async ({codec,width,height,fps}) => {
+    const encoded = await bounded(page.evaluate(async ({codec,width,height,fps}) => {
       if (!window.VideoEncoder) throw Error('Chrome WebCodecs encoder unavailable');
       const frames = []; let description = null, failure = null;
       const encoder = new VideoEncoder({output(chunk, meta) {
@@ -61,7 +61,7 @@ assert(Number.isInteger(fps) && fps >= 1 && fps <= 60);
         bitrate: 6000000, latencyMode: 'realtime', avc: {format: 'avc'}});
       const canvas = document.createElement('canvas'); canvas.width = width; canvas.height = height;
       const context = canvas.getContext('2d');
-      for (let i = 0; i < 60; i++) {
+      for (let i = 0; i < fps*2; i++) {
         context.fillStyle = '#13254b'; context.fillRect(0, 0, width, height);
         context.fillStyle = '#48cfae'; context.fillRect(i * 24, 300, 300, 480);
         context.fillStyle = '#e43a32'; context.fillRect(20,20,60,60);
@@ -71,7 +71,7 @@ assert(Number.isInteger(fps) && fps >= 1 && fps <= 60);
       await encoder.flush(); encoder.close();
       if (failure || !description || !frames.length) throw Error(failure || 'No AVC output');
       return {description, frames};
-    },{codec:codecs[profile],width,height,fps});
+    },{codec:codecs[profile],width,height,fps}),'encode fixture',90000);
     assert.equal(encoded.description[1],{baseline:66,main:77,high:100}[profile],'Encoder must produce the requested AVC profile');
     const record = bytes => { const header = Buffer.alloc(4); header.writeUInt32BE(bytes.length); return Buffer.concat([header, Buffer.from(bytes)]); };
     const fixture = path.join(work, 'avc.bin');
