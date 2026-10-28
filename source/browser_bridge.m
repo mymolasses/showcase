@@ -18,8 +18,6 @@
 #include <errno.h>
 #include "browser_bridge.h"
 #include "browser_assets.h"
-#include "browser_jpeg.h"
-#include "browser_rtc.h"
 #include "browser_settings.h"
 #ifndef SHOWCASE_RELEASE_VERSION
 #define SHOWCASE_RELEASE_VERSION "development"
@@ -35,7 +33,6 @@
 @interface SCBrowserClient : NSObject
 @property int fd;
 @property int role; /* 0 HTTP, 1 media, 2 control, 3 closing */
-@property int transport; /* 0 compressed WS, 1 JPEG WS, 2 MJPEG HTTP, 3 WebRTC */
 @property bool needsKey;
 @property bool pressed;
 @property bool upgradePending;
@@ -71,9 +68,6 @@ static ShowcaseBrowserTouch touchCallback;
 static ShowcaseBrowserResync resyncCallback;
 static bool localPressed;
 static uint16_t localX, localY;
-static NSData *latestJPEG;
-static uint32_t jpegGeneration;
-static uint64_t jpegSequence;
 static ShowcaseBrowserDisplay displayCallback;
 static NSDictionary *displayRequest, *pendingDisplay;
 static NSString *displayError;
@@ -119,7 +113,6 @@ static void release_local(void) {
 }
 static void invalidate_stream(void) {
     release_local();
-    showcase_jpeg_reset(); showcase_rtc_stop(); latestJPEG = nil; jpegGeneration = 0;
     configuration = nil; videoWidth = videoHeight = 0;
     haveTime = false; lastFrameAt = 0; generation++;
     for (SCBrowserClient *c in clients) {
@@ -129,7 +122,6 @@ static void invalidate_stream(void) {
             uint8_t reset[5] = {3}; put_be(reset + 1, generation, 4);
             enqueue(c, websocket_packet([NSData dataWithBytes:reset length:5], 2));
         }
-        if (c.role == 4) { discard_unsent(c); c.role = 3; }
     }
 }
 static void drop_client(SCBrowserClient *c) {
@@ -137,39 +129,12 @@ static void drop_client(SCBrowserClient *c) {
     if (c.role == 1 || c.role == 2)
         fprintf(stderr, "[BROWSER] %s disconnected; queue=%zu bytes\n", c.role == 1 ? "media" : "control", c.queued);
     close(c.fd); [clients removeObject:c];
-    if ((c.role == 1 || c.role == 4) && c.transport <= 2 && c.transport > 0) { showcase_jpeg_reset(); jpegGeneration = 0; }
-    if (c.transport == 3) showcase_rtc_stop();
-}
-static NSData *mjpeg_part(NSData *image) {
-    NSString *header = [NSString stringWithFormat:@"--showcase\r\nContent-Type: image/jpeg\r\nContent-Length: %lu\r\nX-Frame-Sequence: %llu\r\n\r\n",(unsigned long)image.length,(unsigned long long)jpegSequence];
-    NSMutableData *part = [[header dataUsingEncoding:NSUTF8StringEncoding] mutableCopy]; [part appendData:image];
-    [part appendBytes:"\r\n" length:2]; return part;
-}
-static void publish_jpeg(uint32_t stream, uint64_t micros, NSData *image) {
-    pthread_mutex_lock(&browserLock);
-    if (!running || !active || stream != generation || !configuration) { pthread_mutex_unlock(&browserLock); return; }
-    latestJPEG = image; jpegSequence++;
-    for (SCBrowserClient *c in clients) if ((c.role == 1 || c.role == 4) && (c.transport == 1 || c.transport == 2)) {
-        NSData *packet;
-        if (c.transport == 1) {
-            uint8_t header[21] = {4}; put_be(header+1,generation,4); put_be(header+5,jpegSequence,8); put_be(header+13,micros,8);
-            NSMutableData *payload = [NSMutableData dataWithBytes:header length:sizeof(header)]; [payload appendData:image];
-            packet = websocket_packet(payload,2);
-        } else {
-            packet = mjpeg_part(image); c.lastMove = browser_now();
-        }
-        // Keep a partial packet plus the newest complete image. JPEG frames
-        // are independently decodable; no keyframe chain needs preserving.
-        if (c.output.count > 1) { discard_unsent(c); if (c.transport == 1) enqueue(c,configuration); congestionRecoveries++; }
-        if (c.queued + packet.length <= MAX_QUEUE_BYTES) enqueue(c,packet);
-    }
-    pthread_mutex_unlock(&browserLock);
 }
 static void http_reply(SCBrowserClient *c, int code, NSString *mime, NSData *body) {
     NSString *h = [NSString stringWithFormat:
         @"HTTP/1.1 %d %@\r\nContent-Type: %@\r\nContent-Length: %lu\r\n"
          "Cache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n"
-         "Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; img-src 'self' blob:; style-src 'self' 'unsafe-inline'; connect-src 'self'; media-src 'self' blob:; object-src 'none'; frame-ancestors 'none'\r\n"
+         "Content-Security-Policy: default-src 'self'; script-src 'self'; worker-src 'self'; img-src 'self' blob:; style-src 'self' 'unsafe-inline'; connect-src 'self'; media-src 'none'; object-src 'none'; frame-ancestors 'none'\r\n"
          "Connection: close\r\n\r\n",
         code, code == 200 ? @"OK" : @"Rejected", mime, (unsigned long)body.length];
     enqueue(c, [h dataUsingEncoding:NSUTF8StringEncoding]); enqueue(c, body); c.role = 3;
@@ -213,12 +178,11 @@ static void handle_http(SCBrowserClient *c) {
     if (showcase_browser_asset(path.UTF8String,&asset,&assetLength,&assetMime)) {
         http_reply(c,200,@(assetMime),[NSData dataWithBytes:asset length:assetLength]); return;
     }
-    int transport = [path isEqual:@"/jpeg"] ? 1 : [path isEqual:@"/mjpeg"] ? 2 : [path isEqual:@"/rtc"] ? 3 : 0;
-    int role = ([path isEqual:@"/media"] || transport) ? 1 : [path isEqual:@"/control"] ? 2 : 0;
+    int role = [path isEqual:@"/media"] ? 1 : [path isEqual:@"/control"] ? 2 : 0;
     if ([path isEqual:@"/status"]) {
         unsigned viewers = 0, controllers = 0; size_t queued = 0;
         for (SCBrowserClient *other in clients) {
-            if (other.role == 1 || other.role == 4) { viewers++; queued += other.queued; }
+            if (other.role == 1) { viewers++; queued += other.queued; }
             if (other.role == 2) controllers++;
         }
         NSString *owner = localPressed ? @"receiver" : @"none";
@@ -229,9 +193,8 @@ static void handle_http(SCBrowserClient *c) {
             @"mediaQueueBytes": @(queued), @"congestionRecoveries": @(congestionRecoveries),
             @"sourceAVCProfile":@(decoderConfiguration.length>1 ? ((const uint8_t *)decoderConfiguration.bytes)[1] : 0),
             @"frameAgeMs": @(lastFrameAt ? (browser_now() - lastFrameAt) * 1000 : -1),
-            @"renderers": @[@"jpeg",@"mjpeg",@"webcodecs",@"software",@"webrtc"], @"jpegSequence":@(jpegSequence),
+            @"renderer": @"webcodecs-worker", @"mediaQueuePacketsLimit": @8,
             @"videoTimelineMicros":@(timelineMicros)} mutableCopy];
-        [state addEntriesFromDictionary:showcase_jpeg_stats()]; [state addEntriesFromDictionary:showcase_rtc_stats()];
         state[@"displayControl"]=@(displayCallback != NULL);
         state[@"displayRequest"]=displayRequest ?: @{ @"mode":@"auto" };
         state[@"displayNegotiated"]=@{ @"width":@(negotiatedWidth), @"height":@(negotiatedHeight) };
@@ -240,18 +203,8 @@ static void handle_http(SCBrowserClient *c) {
         http_reply(c, 200, @"application/json", [NSJSONSerialization dataWithJSONObject:state options:0 error:NULL]); return;
     }
     for (SCBrowserClient *other in clients) if (other != c &&
-        ((role == 1 && (other.role == 1 || other.role == 4)) || (role == 2 && other.role == 2))) {
+        ((role == 1 && other.role == 1) || (role == 2 && other.role == 2))) {
         http_reply(c,409,@"text/plain",[@"One viewer/controller at a time" dataUsingEncoding:NSUTF8StringEncoding]); return;
-    }
-    if (transport == 2) {
-        NSString *origin = headers[@"origin"];
-        if (origin && ![origin isEqual:[@"http://" stringByAppendingString:headers[@"host"]]]) {
-            http_reply(c,403,@"text/plain",[@"Same origin required" dataUsingEncoding:NSUTF8StringEncoding]); return;
-        }
-        enqueue(c,[@"HTTP/1.1 200 OK\r\nContent-Type: multipart/x-mixed-replace; boundary=showcase\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nConnection: keep-alive\r\n\r\n" dataUsingEncoding:NSUTF8StringEncoding]);
-        c.role = 4; c.transport = 2; c.upgradePending = true; [c.input setLength:0];
-        if (configuration) { jpegGeneration = generation; showcase_jpeg_configure(generation,decoderConfiguration,publish_jpeg); wantKey = true; }
-        return;
     }
     NSString *origin = [@"http://" stringByAppendingString:headers[@"host"]];
     NSData *key = [[NSData alloc] initWithBase64EncodedString:headers[@"sec-websocket-key"] ?: @"" options:0];
@@ -272,11 +225,9 @@ static void handle_http(SCBrowserClient *c) {
     NSString *reply = [NSString stringWithFormat:@"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %@\r\n\r\n", accept];
     enqueue(c, [reply dataUsingEncoding:NSUTF8StringEncoding]);
     c.upgradePending = true;
-    c.role = role; c.needsKey = true; c.transport = transport;
+    c.role = role; c.needsKey = true;
     fprintf(stderr, "[BROWSER] %s connected\n", role == 1 ? "media" : "control");
     if (role == 1 && configuration) { enqueue(c, configuration); wantKey = true; }
-    if (role == 1 && configuration && transport == 1) { jpegGeneration = generation; showcase_jpeg_configure(generation,decoderConfiguration,publish_jpeg); }
-    if (role == 1 && configuration && transport == 3) showcase_rtc_start(generation,decoderConfiguration);
     /* HTTP pipelining and WS payload before upgrade are not supported. */
     [c.input setLength:0];
 }
@@ -315,15 +266,6 @@ static void handle_control(SCBrowserClient *c, NSData *payload) {
         pendingDisplay=@{ @"mode":mode,@"width":@(target.width),@"height":@(target.height),@"viewportWidth":@(vw),@"viewportHeight":@(vh) };
         lastDisplayRequest=now;
         return;
-    }
-    if ([type isEqual:@"rtc-answer"] || [type isEqual:@"rtc-candidate"]) {
-        double stream;
-        bool valid = number(message,@"generation",&stream) && stream == generation;
-        if ([type isEqual:@"rtc-answer"]) valid = valid && [message[@"sdp"] isKindOfClass:NSString.class] && [message[@"sdp"] length] <= 24576;
-        else valid = valid && [message[@"candidate"] isKindOfClass:NSString.class] && [message[@"candidate"] length] <= 2048 &&
-            [message[@"mid"] isKindOfClass:NSString.class] && [message[@"mid"] length] <= 64;
-        if (!valid) { drop_client(c); return; }
-        showcase_rtc_signal(message); c.heard = now; return;
     }
     /* A static CarPlay screen may legitimately stop sending frames. Session
      * reset/foreground state, rather than frame age, determines input validity. */
@@ -407,11 +349,6 @@ static void *browser_loop(void *unused) {
         for (NSUInteger i = 0; i < snapshot.count; i++) {
             SCBrowserClient *c = snapshot[i];
             if (![clients containsObject:c]) continue;
-            // Static screens have no new input. Refresh the same JPEG rarely
-            // to keep HTTP/TLS relays alive, without incrementing frame stats.
-            if (c.role == 4 && !c.output.count && latestJPEG && browser_now()-c.lastMove > 5) {
-                enqueue(c,mjpeg_part(latestJPEG)); c.lastMove = browser_now();
-            }
             short events = fds[i + 1].revents;
             if (events & (POLLERR | POLLHUP | POLLNVAL)) { drop_client(c); continue; }
             if (events & POLLIN) {
@@ -444,13 +381,7 @@ static void *browser_loop(void *unused) {
             if (![clients containsObject:c]) continue;
             double now = browser_now();
             if (c.pressed && now - c.touched > 0.75) release_touch(c);
-            if ((c.role == 3 && c.output.count == 0) || (c.role != 4 && now - c.heard > ((c.role == 0 || c.role == 3) ? 5 : 20))) drop_client(c);
-        }
-        for (NSDictionary *event in showcase_rtc_events()) {
-            if ([event[@"generation"] unsignedIntValue] != generation) continue;
-            if ([event[@"type"] isEqual:@"rtc-keyframe"]) wantKey = true;
-            else for (SCBrowserClient *c in clients) if (c.role == 1 && c.transport == 3)
-                enqueue(c,websocket_packet([NSJSONSerialization dataWithJSONObject:event options:0 error:NULL],1));
+            if ((c.role == 3 && c.output.count == 0) || (now - c.heard > ((c.role == 0 || c.role == 3) ? 5 : 20))) drop_client(c);
         }
         bool request = wantKey && active && browser_now() - lastKeyAt >= 2;
         if (request) { wantKey = false; lastKeyAt = browser_now(); }
@@ -522,7 +453,6 @@ void showcase_browser_stop(void) {
     for (SCBrowserClient *c in [clients copy]) drop_client(c);
     close(listener); listener = -1; clients = nil; configuration = nil; decoderConfiguration = nil;
     pthread_mutex_unlock(&browserLock);
-    showcase_jpeg_stop(); showcase_rtc_stop();
 }
 void showcase_browser_set_active(bool value) {
     pthread_mutex_lock(&browserLock);
@@ -541,8 +471,6 @@ void showcase_browser_set_active(bool value) {
         [payload appendData:decoderConfiguration]; configuration = websocket_packet(payload,2);
         for (SCBrowserClient *c in clients) if (c.role == 1) {
             c.needsKey = true; enqueue(c,configuration);
-            if (c.transport == 1) { jpegGeneration=generation; showcase_jpeg_configure(generation,decoderConfiguration,publish_jpeg); }
-            if (c.transport == 3) showcase_rtc_start(generation,decoderConfiguration);
         }
         wantKey = true;
     }
@@ -586,8 +514,6 @@ void showcase_browser_config(uint16_t width, uint16_t height, const uint8_t *avc
     [payload appendBytes:avcc length:length]; configuration = websocket_packet(payload, 2);
     for (SCBrowserClient *c in clients) if (c.role == 1) {
         enqueue(c, configuration);
-        if (c.transport == 1) { jpegGeneration = generation; showcase_jpeg_configure(generation,decoderConfiguration,publish_jpeg); }
-        if (c.transport == 3) showcase_rtc_start(generation,decoderConfiguration);
     }
     wantKey = true;
     pthread_mutex_unlock(&browserLock);
@@ -605,10 +531,7 @@ void showcase_browser_frame(uint64_t timestamp, bool key, const uint8_t *bytes, 
     pthread_mutex_lock(&browserLock);
     if (!running || !active || !configuration) { pthread_mutex_unlock(&browserLock); return; }
     bool watching = false;
-    bool jpegWatching = false, rtcWatching = false;
-    for (SCBrowserClient *c in clients) if (c.role == 1 || c.role == 4) {
-        watching = true; jpegWatching |= c.transport == 1 || c.transport == 2; rtcWatching |= c.transport == 3;
-    }
+    for (SCBrowserClient *c in clients) if (c.role == 1) watching = true;
     lastFrameAt = browser_now(); receivedFrames++;
     if (!watching) { pthread_mutex_unlock(&browserLock); return; }
     double arrival = browser_now();
@@ -629,18 +552,12 @@ void showcase_browser_frame(uint64_t timestamp, bool key, const uint8_t *bytes, 
     } else { timelineMicros = 0; haveTime = true; }
     lastTime = timestamp; lastArrival = arrival;
     uint64_t micros = timelineMicros;
-    NSData *input = [NSData dataWithBytes:bytes length:length];
-    if (jpegWatching) {
-        if (jpegGeneration != generation) { jpegGeneration = generation; showcase_jpeg_configure(generation,decoderConfiguration,publish_jpeg); }
-        if (!showcase_jpeg_frame(generation,micros,key,input)) wantKey = true;
-    }
-    if (rtcWatching) showcase_rtc_frame(generation,micros,key,input);
     uint8_t header[14] = {2}; put_be(header + 1, generation, 4); header[5] = key ? 1 : 0;
     put_be(header + 6, micros, 8);
     NSMutableData *payload = [NSMutableData dataWithBytes:header length:sizeof(header)];
     [payload appendBytes:bytes length:length]; NSData *packet = websocket_packet(payload, 2);
-    for (SCBrowserClient *c in clients) if (c.role == 1 && c.transport == 0) {
-        if (c.queued + packet.length > MAX_QUEUE_BYTES || c.output.count >= 45) {
+    for (SCBrowserClient *c in clients) if (c.role == 1) {
+        if (c.queued + packet.length > MAX_QUEUE_BYTES || c.output.count >= 8) {
             discard_unsent(c); c.needsKey = true; enqueue(c, configuration); wantKey = true;
             congestionRecoveries++;
         }

@@ -49,14 +49,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Identify native toolchain
-        id: toolchain
-        run: echo "sdk=$(xcrun --sdk iphoneos --show-sdk-version)" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache/restore@v4
-        id: native-cache
-        with:
-          path: build/browser-native
-          key: browser-native-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.sdk }}-${{ hashFiles('tools/browser_native.py') }}
       - name: Verify version tag
         shell: bash
         run: |
@@ -80,7 +72,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 tools/verify_browser_vendor.py
           python3 tools/embed_browser.py
           git diff --exit-code -- source/browser_assets.h
           python3 tests/test_display_profile.py
@@ -107,7 +98,6 @@ jobs:
           SHOWCASE_TEST_TLS=1 node tests/test_browser_e2e.cjs
           SHOWCASE_TEST_AVC_PROFILE=main node tests/test_browser_e2e.cjs
           SHOWCASE_TEST_AVC_PROFILE=high node tests/test_browser_e2e.cjs
-          SHOWCASE_TEST_AVC_PROFILE=high SHOWCASE_TEST_VT_UNAVAILABLE=1 node tests/test_browser_e2e.cjs
           node tests/test_browser_web_tls.cjs
       - name: Build and verify Dopamine rootless deb
         shell: bash
@@ -123,11 +113,6 @@ jobs:
           name: showcase-deb
           path: build/browser-rootless/
           if-no-files-found: error
-      - uses: actions/cache/save@v4
-        if: ${{ always() && steps.native-cache.outputs.cache-hit != 'true' }}
-        with:
-          path: build/browser-native
-          key: ${{ steps.native-cache.outputs.cache-primary-key }}
 
   package-install:
     needs: release
@@ -174,8 +159,6 @@ jobs:
             build/browser-rootless/*.deb \
             build/browser-rootless/SHA256SUMS \
             build/browser-rootless/build-provenance.json \
-            build/browser-rootless/ffmpeg-n8.1.3-source.tar.gz \
-            build/browser-rootless/ffmpeg-build.json \
             docs/BROWSER5.md docs/BROWSER_MODES.md docs/THIRD_PARTY_BROWSER.md docs/PLAYBACK_DIAGNOSTICS.md docs/PLAYBACK_REVIEW.md docs/WIFI_HANDOFF.md --clobber
           gh release edit "$RELEASE_TAG" --draft=false --prerelease \
             --title "$app_name $RELEASE_TAG" \

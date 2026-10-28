@@ -1,13 +1,11 @@
 # Showcase+
 
-> **Showcase+: foreground browser-output prototype based on Showcase.** Stream CarPlay directly
-> from the jailbroken receiver to a browser and return single-touch input,
-> without an Android relay. Browser4 adds a standard-port CarPlay entry, a free HTTP hostname and configurable HTTPS/WSS.
-> See [Tesla setup and certificate requirements](docs/TEST_TESLA_BROWSER4.md). The current working branch removes the PIN and adds live playback recovery and a full-viewport layout, alongside
-> 1080p / 900p / 720p presets and playback/reconnection recovery. Enable it in Settings → Display,
-> then stop and restart CarPlay. Download the rootless test package from
-> [this fork’s Releases](https://github.com/mymolasses/showcase/releases/tag/v1.3.2). See [setup, build instructions, tests and hardware limitations](docs/BROWSER.md).
-> v1.3.2 / 1009 提供 JPEG、MJPEG、WebCodecs、软件解码和 WebRTC 显示选项，移除旧 MSE 播放器，保留触摸及手机蓝牙音频。条件、自动回退与测试边界见 [显示方式](docs/BROWSER_MODES.md)。保留 [Wi-Fi 启动修复](docs/WIFI_HANDOFF.md)。Release 流程不在分支推送时自动构建；手动检查可以只验证引用而不发布，新 Release 必须匹配版本标签。
+> **Showcase+ 1.5.0 / 1015: one browser playback path.**
+> A trusted HTTPS/WSS connection forwards the original H.264 stream to a dedicated browser Worker.
+> WebCodecs decodes it and OffscreenCanvas/WebGL2 draws it, without phone-side JPEG transcoding,
+> an HTML video element, MSE, WebRTC, or a software decoder. The five-mode selector and fallback
+> modes have been removed. Touch, Bluetooth audio, output resolution and reconnect remain.
+> See [browser setup and requirements](docs/BROWSER_MODES.md).
 
 ## Updates
 

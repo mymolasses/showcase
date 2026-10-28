@@ -1,3 +1,5 @@
+> 历史说明：当前版本仅支持可信 HTTPS/WSS 下的 Worker/WebCodecs/WebGL2。请优先按 [当前说明](BROWSER_MODES.md) 配置；下文旧播放器与 HTTP 播放描述不再适用。
+
 # Browser4：无端口 CarPlay 入口、域名和可选 HTTPS
 
 适用接收机：iPhone 14 Pro Max / iOS 16.2 / Dopamine rootless。

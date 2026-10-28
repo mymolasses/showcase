@@ -11,14 +11,17 @@ const wire=data=>{
 (async()=>{
   let browser,page,timer,sequence=0,generation=1,width=1920,height=1080,profile={mode:'auto'},active=true,phoneDisplay={width:1920,height:900};
   const media=new Set(),controls=new Set(),sockets=new Set(),requests=[],touches=[],errors=[],images=new Map();
-  const config=()=>{const b=Buffer.alloc(9);b[0]=1;b.writeUInt32BE(generation,1);b.writeUInt16BE(width,5);b.writeUInt16BE(height,7);return Buffer.concat([b,Buffer.from('0142001effe100046742001e01000268ce','hex')]);};
+  const config=()=>{const b=Buffer.alloc(9);b[0]=1;b.writeUInt32BE(generation,1);b.writeUInt16BE(width,5);b.writeUInt16BE(height,7);return Buffer.concat([b,images.get(`${width}x${height}`).description]);};
   async function image(w,h) {
     const key=`${w}x${h}`;if(images.has(key))return images.get(key);
     const data=await page.evaluate(async({w,h})=>{
       const canvas=document.createElement('canvas');canvas.width=w;canvas.height=h;const c=canvas.getContext('2d');
       c.fillStyle='#18395b';c.fillRect(0,0,w,h);c.fillStyle='#f04030';c.fillRect(0,0,50,50);c.fillStyle='#20e080';c.fillRect(w-50,h-50,50,50);
-      const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/jpeg',.8));return [...new Uint8Array(await blob.arrayBuffer())];
-    },{w,h});const raw=Buffer.from(data);images.set(key,raw);return raw;
+      let description,frame;
+      const encoder=new VideoEncoder({output(chunk,meta){const b=new Uint8Array(chunk.byteLength);chunk.copyTo(b);frame=[...b];if(meta.decoderConfig?.description)description=[...new Uint8Array(meta.decoderConfig.description)];},error:e=>{throw e;}});
+      encoder.configure({codec:'avc1.42002a',width:w,height:h,framerate:30,bitrate:4000000,latencyMode:'realtime',avc:{format:'avc'}});
+      const picture=new VideoFrame(canvas,{timestamp:0});encoder.encode(picture,{keyFrame:true});picture.close();await encoder.flush();encoder.close();return {description,frame};
+    },{w,h});const raw={description:Buffer.from(data.description),frame:Buffer.from(data.frame)};images.set(key,raw);return raw;
   }
   let applying=false;
   async function apply(message) {
@@ -54,9 +57,9 @@ const wire=data=>{
   });
   try {
     server.listen(0,'127.0.0.1');await once(server,'listening');const base=`http://127.0.0.1:${server.address().port}`;
-    browser=await chromium.launch({executablePath:process.env.CHROME||undefined,headless:true});page=await browser.newPage({viewport:{width:1280,height:800}});
+    browser=await chromium.launch({executablePath:process.env.CHROME||undefined,headless:true,args:['--enable-unsafe-swiftshader','--use-angle=swiftshader']});page=await browser.newPage({viewport:{width:1280,height:800}});
     page.on('pageerror',error=>errors.push(error.message));await page.goto(base+'/blank');await image(1920,1080);
-    timer=setInterval(()=>{if(!active)return;const bytes=images.get(`${width}x${height}`);if(!bytes)return;const h=Buffer.alloc(21);h[0]=4;h.writeUInt32BE(generation,1);h.writeBigUInt64BE(BigInt(++sequence),5);h.writeBigUInt64BE(BigInt(sequence*100000),13);for(const s of media)s.write(wire(Buffer.concat([h,bytes])));},100);
+    timer=setInterval(()=>{if(!active)return;const bytes=images.get(`${width}x${height}`);if(!bytes)return;const h=Buffer.alloc(14);h[0]=2;h.writeUInt32BE(generation,1);h[5]=1;h.writeBigUInt64BE(BigInt(++sequence*100000),6);for(const s of media)s.write(wire(Buffer.concat([h,bytes.frame])));},100);
     await page.goto(base);
     const ready=async(mode,w,h)=>page.waitForFunction(({mode,w,h})=>{
       const d=window.showcaseDiagnostics?.();return d?.outputMode===mode&&d.displayed&&d.receiver.width===w&&d.receiver.height===h&&d.resolution===`${w} × ${h}`;

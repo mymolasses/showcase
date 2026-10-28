@@ -31,7 +31,7 @@ function fixture(connectReady = 1) {
     getElementById:element, querySelector:()=>video, body:{classList:{toggle(){}}}, hidden:false});
   const initial = new Socket();
   const context = {window,document,WebSocket:Socket,location:{protocol:'http:',host:'fixture.test:8080'},
-    ShowcaseProtocol:require('../web/protocol.js'),ShowcaseRenderers:{labels:{jpeg:'JPEG'},unsupported:()=>null},
+    ShowcaseProtocol:require('../web/protocol.js'),ShowcaseRenderers:{label:'WebCodecs',unsupported:()=>null,create:()=>({close(){},stats:()=>({}),snapshotSource:()=>null})},
     performance:{now:()=>1000}, AbortController, fetch:async()=>({ok:true,json:async()=>({active:true,configured:true,viewers:0,controllers:0})}),
     setTimeout:(fn,delay)=>{timers.set(++ident,{fn,delay});return ident;},clearTimeout:id=>timers.delete(id),
     setInterval:(fn,delay)=>{intervals.set(++ident,{fn,delay});return ident;},clearInterval:id=>intervals.delete(id),
@@ -80,9 +80,9 @@ function fixture(connectReady = 1) {
   assert.equal(broken.initial.readyState,3);assert.equal(broken.captured.size,0);
   const cached=fixture();cached.window.emit('pagehide');cached.window.emit('pageshow',{persisted:true});
   await new Promise(setImmediate);
-  assert.equal(cached.sockets.length,3,'bfcache restoration should reconnect both sockets');
+  assert.equal(cached.sockets.length,2,'bfcache restoration should reconnect both sockets');
   const connecting=fixture(0);connecting.window.emit('pagehide');connecting.window.emit('pageshow',{persisted:true});
-  await new Promise(setImmediate);assert.equal(connecting.sockets.length,3);connecting.timeout(8000);
+  await new Promise(setImmediate);assert.equal(connecting.sockets.length,2);connecting.timeout(10000);
   assert(connecting.sockets.every(s=>s.readyState===3),'a hung WebSocket upgrade must time out');
   console.log('PASS: coalesced drag with final up, capture/cancel/blur/resize, long-press hold, bounded control congestion, bfcache reconnect, WS upgrade timeout');
 })().catch(error=>{console.error(error);process.exitCode=1;});

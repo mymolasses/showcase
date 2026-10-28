@@ -3719,10 +3719,10 @@ static pid_t reusable_baa_broker(void) {
     if (primary.length) [message appendFormat:@"\n普通热点探测：http://%@:8081/probe\n", primary];
     if ([s[@"localReady"] boolValue]) {
         NSString *domain = s[@"domain"] ?: BROWSER_WEB_DOMAIN;
-        if ([s[@"port80"] boolValue]) [message appendFormat:@"\nCarPlay：http://%@/\nIP 入口：http://99.99.99.99/\n",domain];
+        if ([s[@"port80"] boolValue]) [message appendFormat:@"\n网络诊断：http://%@/probe\nIP 诊断：http://99.99.99.99/probe\n",domain];
         if ([s[@"port80"] boolValue]) [message appendString:@"探测：http://99.99.99.99/probe\n"];
-        [message appendString:@"备用入口：http://99.99.99.99:8081/\n备用探测：http://99.99.99.99:8081/probe\n"];
-        if ([s[@"httpsReady"] boolValue]) [message appendFormat:@"HTTPS：https://%@/\n",domain];
+        [message appendString:@"备用诊断：http://99.99.99.99:8081/probe\n备用探测：http://99.99.99.99:8081/probe\n"];
+        if ([s[@"httpsReady"] boolValue]) [message appendFormat:@"CarPlay（HTTPS）：https://%@/\n",domain];
         [message appendFormat:@"\nHTTPS：%@\n\n本机地址已配置，仍需车机实际打开验证。",s[@"httpsStatus"] ?: @"未配置证书"];
     } else [message appendString:@"\n兼容入口尚未就绪。请确认个人热点已开，且至少一台设备已连接。"];
     return message;
@@ -7437,7 +7437,7 @@ static BOOL g_settings_hardware_loading = NO;
     }];
     [b labelText:[self.appDelegate browserProbeDescription] font:[UIFont monospacedDigitSystemFontOfSize:14 weight:UIFontWeightRegular]
         alpha:0.85 inset:16 gapAfter:16 color:nil];
-    [b message:@"默认免费域名提供 HTTP 入口。HTTPS 需你自己的域名及匹配的可信 P12 证书。修改域名或证书后，关闭再开启车机网络探测。" color:[UIColor colorWithWhite:1 alpha:0.65]];
+    [b message:@"浏览器 CarPlay 需要可信 HTTPS/WSS。请配置自有域名及匹配的可信 P12 证书；HTTP 仅用于网络诊断。修改后关闭再开启车机网络探测。" color:[UIColor colorWithWhite:1 alpha:0.65]];
 #endif
 
     [b card:^(SettingsCard *card) {

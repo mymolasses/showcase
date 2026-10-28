@@ -1,3 +1,14 @@
+# Showcase+ 1.5.0 / 1015
+
+- Replace the five browser display modes with one Worker/WebCodecs/OffscreenCanvas/WebGL2 path.
+- Forward compressed H.264 over same-origin WSS without phone-side image transcoding.
+- Require trusted HTTPS and report unsupported browser/codec capabilities explicitly.
+- Retain output sizing, touch/hold/cancel, Bluetooth audio, static screens and bounded reconnection.
+- Remove JPEG/MJPEG, Broadway, WebRTC and their native dependencies from the browser package.
+- Target iPhone and Tesla validation remain required; desktop tests do not establish D-gear behavior.
+
+---
+
 **Showcase+ v1.4.2**，应用／包版本 **1.4.2**，构建 **1014**。适用于 iOS 16.2+ / arm64 / Dopamine rootless。
 
 - 修复发送端“忽略车辆／蓝牙设备”后的一种重连死循环：接收端反复提交旧蓝牙密钥，对端返回 HCI `PIN_OR_KEY_MISSING (0x06)`，随后断开、十秒重试，再次提交同一旧密钥。现在仅对已记住的发送机，在确认同一连接认证失败并断开后，删除该设备的失效密钥，再由正常配对流程重试。每次 Bluetooth 助手启动最多恢复一次；不会清空其他设备的蓝牙记录，也不删除 AirPlay 控制器或热点设置。

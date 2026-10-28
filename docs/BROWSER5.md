@@ -1,3 +1,5 @@
+> 历史说明：当前版本仅支持可信 HTTPS/WSS 下的 Worker/WebCodecs/WebGL2。请优先按 [当前说明](BROWSER_MODES.md) 配置；下文旧播放器与 HTTP 播放描述不再适用。
+
 > 历史记录：下文描述 v1.2.x。v1.3.0 已移除 MSE，当前安装、显示选项和兼容性条件见 [BROWSER_MODES](BROWSER_MODES.md)。
 
 # Showcase+ v1.2.1（Browser5 后续修复）

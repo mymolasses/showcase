@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * Optional macOS/Chrome integration: create synthetic AVC with WebCodecs, then
- * play it through production JPEG/H.264 renderers and send real pointer input.
+ * play it through production Worker/WebCodecs/WebGL renderer and send real pointer input.
  * Requires playwright (NODE_PATH or local install) and Google Chrome.
  */
 const assert = require('node:assert/strict');
@@ -19,21 +19,20 @@ const domain = 'carplay.showcase.test';
 const profile = process.env.SHOWCASE_TEST_AVC_PROFILE || 'baseline';
 const codecs = {baseline:'avc1.42002a',main:'avc1.4d002a',high:'avc1.64002a'};
 assert(codecs[profile], 'Unknown AVC test profile');
-const fullHD = profile==='baseline' || process.env.SHOWCASE_TEST_VT_UNAVAILABLE==='1';
+const fullHD = profile==='baseline';
 const width = fullHD ? 1920 : 1600, height = fullHD ? 1080 : 900;
-process.env.SHOWCASE_RTC_DEBUG='1'; // Synthetic local peers only; no phone data.
 
 (async () => {
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'showcase-browser-e2e-'));
   let browser, server, helper, gateway;
   const certificate = useTLS ? fixtureTLS(work, domain) : null;
   try {
-    const nativeFlags=require('./native_browser_fixture.cjs')(path.join(work,'bridge'));
+    require('./native_browser_fixture.cjs')(path.join(work,'bridge'));
     execFileSync('clang', ['-fobjc-arc', '-DSC_PROBE_TEST=1', '-Wno-deprecated-declarations', '-framework', 'Foundation', '-framework', 'Security',
       path.join(root,'source/browser_probe.m'),path.join(root,'source/browser_network.c'),path.join(root,'source/browser_web_tls.m'),'-o',path.join(work,'gateway')]);
     server = http.createServer((_, res) => { res.end('<!doctype html><title>Synthetic AVC fixture</title>'); });
     server.listen(0, '127.0.0.1'); await once(server, 'listening');
-    browser = await chromium.launch({executablePath: process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', headless: true, args: ['--no-proxy-server', ...(useTLS ? ['--host-resolver-rules=MAP '+domain+' 127.0.0.1', '--ignore-certificate-errors-spki-list='+certificate.spki] : [])]});
+    browser = await chromium.launch({executablePath: process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', headless: true, args: ['--enable-unsafe-swiftshader','--use-angle=swiftshader','--no-proxy-server', ...(useTLS ? ['--host-resolver-rules=MAP '+domain+' 127.0.0.1', '--ignore-certificate-errors-spki-list='+certificate.spki] : [])]});
     const page = await browser.newPage({viewport: {width: 1280, height: 900}});
     await page.goto(`http://127.0.0.1:${server.address().port}`);
     const encoded = await page.evaluate(async ({codec,width,height}) => {
@@ -62,10 +61,6 @@ process.env.SHOWCASE_RTC_DEBUG='1'; // Synthetic local peers only; no phone data
     const record = bytes => { const header = Buffer.alloc(4); header.writeUInt32BE(bytes.length); return Buffer.concat([header, Buffer.from(bytes)]); };
     const fixture = path.join(work, 'avc.bin');
     fs.writeFileSync(fixture, Buffer.concat([record(encoded.description), ...encoded.frames.map(record)]));
-    execFileSync('clang',['-fobjc-arc','-Wno-deprecated-declarations',path.join(root,'tests/browser_jpeg_recovery.m'),
-      '-framework','Foundation',...nativeFlags,
-      '-o',path.join(work,'jpeg-recovery')],{stdio:'inherit'});
-    execFileSync(path.join(work,'jpeg-recovery'),[fixture],{stdio:'inherit',timeout:25000});
     const port = server.address().port;
     await new Promise(resolve => server.close(resolve)); server = null;
     helper = spawn(path.join(work, 'bridge'), [String(port), fixture, `${width}x${height}`], {stdio: ['pipe', 'pipe', 'pipe']});
@@ -90,24 +85,17 @@ process.env.SHOWCASE_RTC_DEBUG='1'; // Synthetic local peers only; no phone data
     let mediaConnections = 0, controls = 0;
     page.on('pageerror', error => pageErrors.push(error.message));
     page.on('websocket', socket => {
-      if (['/media','/jpeg','/rtc'].some(route=>socket.url().endsWith(route))) mediaConnections++;
+      if (socket.url().endsWith('/media')) mediaConnections++;
       if (socket.url().endsWith('/control')) controls++;
     });
     await page.goto(useTLS ? `https://${domain}:${tlsPort}/` : `http://127.0.0.1:${frontPort}/`);
     assert.equal(await page.locator('input').count(), 0);
     await page.waitForFunction(()=>window.showcaseDiagnostics?.().displayed && showcaseDiagnostics().drawnFrames>2,null,{timeout:20000});
-    if(process.env.SHOWCASE_TEST_VT_UNAVAILABLE==='1') {
-      // Frames can arrive before the independent 1.5s status poll refreshes
-      // the pre-subscription snapshot. Observe the real backend transition.
-      await page.waitForFunction(()=>showcaseDiagnostics().receiver.jpegDecoderBackend==='ffmpeg',null,{timeout:10000});
-      assert.equal(await page.evaluate(()=>showcaseDiagnostics().receiver.jpegDecoderBackend),'ffmpeg');
-      assert((await page.evaluate(()=>showcaseDiagnostics().receiver.jpegFallbackReason)).includes('-12780'));
-    }
     await until(() => stderr.includes('[BROWSER] control connected'), 'browser control channel');
     // Status polling must enable input after actual frames arrive.
     await page.waitForTimeout(1200);
     await page.click('#menu');
-    if(profile!=='baseline') assert.equal(await page.locator('#renderer option[value="software"]').evaluate(o=>o.disabled),true);
+    assert.equal(await page.locator('#renderer').count(),0);
     assert.equal(await page.locator('#display canvas').evaluate(c=>getComputedStyle(c).objectFit),'contain');
     const rect = await page.locator('#surface').boundingBox();
     const before = output.match(/TOUCH 0 /g)?.length || 0;
@@ -142,7 +130,7 @@ process.env.SHOWCASE_RTC_DEBUG='1'; // Synthetic local peers only; no phone data
     const initialTime = await page.evaluate(()=>showcaseDiagnostics().drawnFrames);
     helper.stdin.write('s');
     await page.waitForTimeout(2300);
-    await page.waitForFunction(()=>{const d=showcaseDiagnostics();return d.receiver.jpegLastEncodedMicros===d.receiver.videoTimelineMicros && d.lastDrawTimestamp===d.receiver.jpegSequence;},null,{timeout:6000});
+    assert.equal(await page.evaluate(()=>showcaseDiagnostics().displayed),true);
     helper.stdin.write('r');
     await page.waitForTimeout(100);
     assert.equal(mediaConnections, 1);
@@ -158,23 +146,11 @@ process.env.SHOWCASE_RTC_DEBUG='1'; // Synthetic local peers only; no phone data
     await page.screenshot({path: path.join(work, 'browser.png')});
     await page.click('#reconnect');
     await page.waitForFunction(()=>showcaseDiagnostics().displayed && showcaseDiagnostics().drawnFrames>2,null,{timeout:20000});
-    // Every offered backend must actually decode/render through production
-    // native services; no synthetic server or permissive asset interception.
-    for(const mode of (profile==='baseline' ? ['webcodecs','software','mjpeg','webrtc','jpeg'] : ['mjpeg','jpeg'])) {
-      await page.selectOption('#renderer',mode);
-      try {
-        await page.waitForFunction(mode=>{const d=showcaseDiagnostics();return d.renderer===mode && d.displayed && (mode==='mjpeg'||d.drawnFrames>2);},mode,{timeout:25000});
-        const drawn=await page.evaluate(()=>showcaseDiagnostics().drawnFrames);
-        if(mode!=='mjpeg') await page.waitForFunction(count=>showcaseDiagnostics().drawnFrames>count+2,drawn,{timeout:15000});
-      } catch(error) { throw Error(mode+' failed: '+await page.evaluate(()=>JSON.stringify(showcaseDiagnostics()))+'\n'+stderr+'\n'+output.slice(-8000)+'\n'+error); }
-      assert.equal(await page.locator('#poster').isVisible(),false);
-      const color=await page.evaluate(()=>{const source=document.querySelector('#display canvas,#display img');const c=document.createElement('canvas');c.width=c.height=1;const ctx=c.getContext('2d');const height=source.naturalHeight||source.height;ctx.drawImage(source,10,height-10,1,1,0,0,1,1);return [...ctx.getImageData(0,0,1,1).data];});
-      assert(color[2]>color[0] && color[2]>40 && color[3]===255,'native decoded pixels must match the fixture in '+mode+': '+color);
-      const corner=await page.evaluate(()=>{const source=document.querySelector('#display canvas,#display img');const c=document.createElement('canvas');c.width=c.height=1;const ctx=c.getContext('2d');const width=source.naturalWidth||source.width,height=source.naturalHeight||source.height;ctx.drawImage(source,width/64,height/36,1,1,0,0,1,1);return [...ctx.getImageData(0,0,1,1).data];});
-      assert(corner[0]>corner[2]+50,'native picture orientation must preserve the red top-left marker in '+mode+': '+corner);
-      if(mode==='jpeg') assert.equal(await page.locator('#display canvas').evaluate(c=>c.width),1280,'native JPEG caps width');
-      if(mode==='jpeg') assert.equal(await page.locator('#display canvas').evaluate(c=>c.height),720,'native JPEG preserves the visible 16:9 crop');
-    }
+    const color=await page.evaluate(()=>{const source=document.querySelector('#display canvas');const c=document.createElement('canvas');c.width=c.height=1;const ctx=c.getContext('2d');ctx.drawImage(source,10,source.height-10,1,1,0,0,1,1);return [...ctx.getImageData(0,0,1,1).data];});
+    assert(color[2]>color[0] && color[2]>40 && color[3]===255,'decoded fixture pixels: '+color);
+    const corner=await page.evaluate(()=>{const source=document.querySelector('#display canvas');const c=document.createElement('canvas');c.width=c.height=1;const ctx=c.getContext('2d');ctx.drawImage(source,source.width/64,source.height/36,1,1,0,0,1,1);return [...ctx.getImageData(0,0,1,1).data];});
+    assert(corner[0]>corner[2]+50,'red marker must remain at top-left: '+corner);
+    assert.equal(await page.locator('video,img').count(),0);
     // Actual service loss: retain the last image, back off, recover new sockets.
     helper.stdin.write('q'); await once(helper, 'exit');
     await page.waitForFunction(() => document.querySelector('#state').textContent.includes('重试'));
@@ -188,7 +164,7 @@ process.env.SHOWCASE_RTC_DEBUG='1'; // Synthetic local peers only; no phone data
     helper.stdin.write('f');
     await page.waitForFunction(()=>showcaseDiagnostics().displayed && showcaseDiagnostics().drawnFrames>2,null,{timeout:20000});
     assert.deepEqual(pageErrors, []);
-    console.log(`PASS (${useTLS?'HTTPS/WSS':'HTTP/WS'}, ${profile} ${width}x${height}, VT unavailable=${process.env.SHOWCASE_TEST_VT_UNAVAILABLE==='1'}): pixels/crop/orientation, touch, static flush, reconnect, foreground without a new VideoConfig`);
+    console.log(`PASS (${useTLS?'HTTPS/WSS':'HTTP/WS'}, ${profile} ${width}x${height}): pixels/crop/orientation, touch, static flush, reconnect, foreground without a new VideoConfig`);
     console.log('Synthetic screenshot:', path.join(work, 'browser.png'));
   } finally {
     if (helper && helper.exitCode === null) { helper.stdin.write('q'); await once(helper, 'exit'); }

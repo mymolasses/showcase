@@ -20,11 +20,6 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-try:
-    from browser_native import flags as browser_native_flags, prepare as prepare_native
-except ModuleNotFoundError:
-    from tools.browser_native import flags as browser_native_flags, prepare as prepare_native
-
 ROOT = Path(__file__).resolve().parents[1]
 UPSTREAM_SHA256 = 'f91ab0bf7ddf94d9eb1eacc56db37e8943ea8f1dce60c4976f793d679707a1d6'
 UPSTREAM_URL = ('https://github.com/amineross/showcase/releases/download/v1.0-beta5-2/'
@@ -179,7 +174,6 @@ def main():
     revision = run(['git', 'rev-parse', 'HEAD'], True).strip()
     source_paths = ['source/Showcase.m', 'source/carplay_bt.m', 'source/iap2_stream.h',
                     'source/carplay_services.m', 'source/browser_bridge.m',
-                    'source/browser_jpeg.m','source/browser_jpeg.h','source/browser_rtc.m','source/browser_rtc.h',
                     'source/browser_bridge.h', 'source/browser_settings.h', 'source/display_geometry.h', 'source/browser_assets.h',
                     'source/browser_network.c', 'source/browser_network.h', 'source/browser_probe.m',
                     'source/browser_web_tls.m', 'source/browser_web_tls.h',
@@ -193,20 +187,7 @@ def main():
                   'compiler': compiler, 'sdk': Path(sdk).name,
                   'upstream_runtime': {'url': UPSTREAM_URL, 'sha256': UPSTREAM_SHA256},
                   'compiled_source_sha256': {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in source_paths}}
-    native = prepare_native('ios')
-    provenance['native_dependency_pins'] = native['pins']
-    provenance['mbedtls_configuration_defines'] = native['mbedtls_defines']
-    ffmpeg_source = ROOT/'build/browser-native/sources/ffmpeg'
-    source_name = 'ffmpeg-n8.1.3-source.tar.gz'
-    subprocess.run(['git','-C',str(ffmpeg_source),'diff','--exit-code'],check=True)
-    source_data = subprocess.check_output(['git','-C',str(ffmpeg_source),'archive','--format=tar.gz',
-        '--prefix=ffmpeg-n8.1.3/','HEAD'])
-    (args.output/source_name).write_bytes(source_data)
-    provenance['ffmpeg_source'] = {'archive':source_name,'sha256':hashlib.sha256(source_data).hexdigest(),
-        'configure':native['ffmpeg_configure'],'patches':[]}
-    (args.output/'ffmpeg-build.json').write_text(json.dumps({'pins':native['pins']['ffmpeg'],
-        **provenance['ffmpeg_source']},indent=2)+'\n')
-    provenance['browser_vendor_files'] = json.loads((ROOT/'web/vendor/broadway/provenance.json').read_text())
+    provenance['browser_renderer'] = 'worker-webcodecs-webgl2'
     unchanged = ['var/jb/usr/bin/BTdaemon', 'var/jb/usr/lib/libBTstack.dylib']
     provenance['unchanged_runtime_sha256'] = {name: hashlib.sha256(payload[name][1]).hexdigest() for name in unchanged}
     with tempfile.TemporaryDirectory(prefix='showcase-rootless-build-') as directory:
@@ -224,10 +205,10 @@ def main():
                      'source/Showcase.m', '-framework', 'UIKit', '-framework', 'AVFoundation',
                      '-framework', 'AudioToolbox', '-framework', 'CoreMedia', '-framework', 'Foundation',
                      '-framework', 'Security', '-Wl,-undefined,dynamic_lookup', '-o', str(ui)])
-        run(flags + ['source/carplay_services.m', 'source/browser_bridge.m', 'source/browser_jpeg.m','source/browser_rtc.m','source/carplay_pair.c',
+        run(flags + ['source/carplay_services.m', 'source/browser_bridge.m', 'source/carplay_pair.c',
                      'source/vendor/monocypher/monocypher.c', 'source/vendor/monocypher/monocypher-ed25519.c',
                      'source/vendor/libtommath/tommath.c', '-framework', 'Foundation', '-framework', 'Security',
-                     *browser_native_flags('ios'), '-o', str(service)])
+                     '-o', str(service)])
         run(flags + ['source/browser_probe.m', 'source/browser_network.c', 'source/browser_web_tls.m',
                      '-framework', 'Foundation', '-framework', 'Security', '-o', str(probe)])
         run(flags + ['source/carplay_bt.m', str(btstack_library), '-framework', 'Foundation',
@@ -295,10 +276,6 @@ def main():
     replace(payload, 'var/jb/usr/share/showcase/WIFI_HANDOFF.md', (ROOT / 'docs/WIFI_HANDOFF.md').read_bytes(), 0o644)
     replace(payload, 'var/jb/usr/share/showcase/BROWSER_MODES.md', (ROOT / 'docs/BROWSER_MODES.md').read_bytes(), 0o644)
     replace(payload, 'var/jb/usr/share/showcase/THIRD_PARTY_BROWSER.md', (ROOT / 'docs/THIRD_PARTY_BROWSER.md').read_bytes(), 0o644)
-    for name, path in native.get('licenses',{}).items():
-        replace(payload,'var/jb/usr/share/showcase/licenses/'+name,Path(path).read_bytes(),0o644)
-    for path in (ROOT/'web/vendor/broadway').glob('LICENSE*'):
-        replace(payload,'var/jb/usr/share/showcase/licenses/broadway/'+path.name,path.read_bytes(),0o644)
     md5 = ''.join(hashlib.md5(data).hexdigest() + '  ' + name + '\n'
                   for name, (member, data) in sorted(payload.items()) if member.isfile())
     replace(control, 'md5sums', md5.encode(), 0o644)
@@ -326,7 +303,7 @@ def main():
     for name in unchanged:
         assert hashlib.sha256(installed[name][1]).hexdigest() == provenance['unchanged_runtime_sha256'][name]
     sha = hashlib.sha256(output.read_bytes()).hexdigest()
-    checksum_names = [NAME,source_name,'ffmpeg-build.json']
+    checksum_names = [NAME]
     (args.output / 'SHA256SUMS').write_text(''.join(hashlib.sha256((args.output/name).read_bytes()).hexdigest()+
         '  '+name+'\n' for name in checksum_names))
     (args.output / 'build-provenance.json').write_bytes(record)

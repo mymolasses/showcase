@@ -59,11 +59,6 @@
       if ((bytes[5] === 1) !== key) throw Error('Invalid keyframe flag');
       return {type:'avc',generation:view.getUint32(1),key,micros:uint64(view,6),bytes:frame};
     }
-    if (bytes[0] === 4 && bytes.length > 24) {
-      const image = bytes.subarray(21);
-      if (image[0] !== 255 || image[1] !== 216 || image[image.length-2] !== 255 || image[image.length-1] !== 217) throw Error('Invalid JPEG frame');
-      return {type:'jpeg',generation:view.getUint32(1),sequence:uint64(view,5),micros:uint64(view,13),bytes:image};
-    }
     throw Error('Invalid browser media packet');
   }
   function displaySize(width,height) {

@@ -1,13 +1,9 @@
-# Browser backend sources and notices
+# Browser implementation and dependencies
 
-The new JPEG, protocol, control and rendering wrappers are Showcase fork code under GPL-3.0-or-later. Architectural references are not a claim of vehicle compatibility or affiliation.
+The single browser renderer is an original GPL-3.0-or-later implementation using standard WebCodecs,
+Worker, OffscreenCanvas, WebGL2 and WebSocket APIs. Inspection of the supplied TarPlay browser page
+informed the architecture; its scripts were not copied or redistributed in this repository.
 
-- Tesla Android frontend: https://github.com/tesla-android/frontend at `34763a62819a1dedad9d3eb62f1e175f2659091f`. The vendored Broadway Decoder.js, YUVCanvas.js and avc.wasm are unmodified inputs, with exact source URLs and SHA-256 in `web/vendor/broadway/provenance.json`. Its GPL-3.0 license is retained alongside the upstream Broadway license and README. Broadway originates from the Android H.264 decoder compiled with Emscripten: https://github.com/mbebenita/Broadway.
-- libdatachannel `v0.24.6`, commit `6b1e2e620f1e37f0eafeee702eaea0043cb305fd`, MPL-2.0: https://github.com/paullouisageneau/libdatachannel. Its recursively checked-out dependency revisions are pinned by that commit's gitlinks. This includes libjuice, libSRTP, usrsctp, plog and nlohmann/json; their original license files are copied into the package.
-- Mbed TLS `mbedtls-3.6.6`, commit `0bebf8b8c7f07abe3571ded48a11aa907a1ffb20`, Apache-2.0 or GPL-2.0-or-later as stated in its source licensing: https://github.com/Mbed-TLS/mbedtls. Original license and notice files are distributed. This version supports fragmented DTLS ClientHello messages; libdatachannel includes the matching datagram read-length fix (upstream PR #1564). The native browser integration test must establish DTLS, receive RTP and render pixels without a JPEG fallback.
-- FFmpeg `n8.1.3`, commit `1041abdc962f4cc4f394aa8de9dc5236c0c3b9e7`, LGPL-2.1-or-later for the selected configuration: https://github.com/FFmpeg/FFmpeg. Only libavcodec's H.264 decoder/parser, libavutil and libswscale are enabled. No GPL/nonfree options, hardware acceleration, network or command-line programs are enabled. This library provides independent CPU decode and color conversion when VideoToolbox fails. Original license texts are installed in `licenses/ffmpeg/`. Each Release includes `ffmpeg-n8.1.3-source.tar.gz` (unmodified source) and `ffmpeg-build.json` (exact revision/configure arguments, no source patches); `tools/browser_native.py` is the build recipe and the tagged Showcase source supports rebuilding/relinking the application. The app's About row links to that Release and identifies FFmpeg's license.
-- OpenCarStream: https://github.com/JoyLau/opencarstream and https://github.com/santibacat/opencarstream, referenced for the multipart JPEG architecture. No Python, FFmpeg commands, downloader or entertainment site implementation is copied into Showcase.
-- WheelPlay: https://github.com/fython/wheelplay, referenced for selectable backends, JPEG fallback, offscreen callback polling and offscreen-video Canvas limitations; its Android app and JNI implementation are not copied.
-- PlayPort: https://github.com/youcci/playport, referenced for direct WebCodecs CarPlay display. Its Kotlin receiver and TypeScript source are not copied.
-
-Browser vendor notices and native dependency license files are installed under `/var/jb/usr/share/showcase/licenses/`. Reproducible source and the Release tag are available at https://github.com/mymolasses/showcase; build provenance records the source commit and dependency pins. Existing Showcase and CarPlay runtime notices remain applicable.
+The Broadway/WASM decoder, JPEG/FFmpeg fallback and libdatachannel WebRTC backend have been removed,
+including their bundled browser assets, native build dependencies and generated release artifacts.
+Existing unrelated CarPlay cryptography and BTstack licensing remain unchanged.

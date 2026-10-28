@@ -1,3 +1,5 @@
+> 历史说明：当前版本仅支持可信 HTTPS/WSS 下的 Worker/WebCodecs/WebGL2。请优先按 [当前说明](BROWSER_MODES.md) 配置；下文旧播放器与 HTTP 播放描述不再适用。
+
 # Browser output prototype / 浏览器输出原型
 
 > 以下保留 Browser4 的设计与安装记录。当前工作分支已移除网页配对码并自动连接，新增卡帧恢复和满网页布局；以 [Browser5 说明](BROWSER5.md) 为准。已有 Browser4 安装包不含这些修改。
