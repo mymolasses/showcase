@@ -165,6 +165,7 @@ assert(Number.isInteger(fps) && fps >= 1 && fps <= 60);
     // Inspect the actual framebuffer in its owning Worker. Copying a transferred
     // placeholder canvas back into a main-thread 2D canvas can stall macOS's
     // headless compositor even when the decoder and GPU are progressing.
+    if(process.env.SHOWCASE_TEST_GPU_READBACK!=='0') {
     helper.stdin.write('s');await page.waitForTimeout(700);progress('decoded pixel checks');
     const {color,corner}=await bounded(mediaWorker.evaluate(()=>{
       const pixel=(x,y)=>{const p=new Uint8Array(4);gl.readPixels(x,y,1,1,gl.RGBA,gl.UNSIGNED_BYTE,p);return [...p];};
@@ -173,6 +174,7 @@ assert(Number.isInteger(fps) && fps >= 1 && fps <= 60);
     assert(color[2]>color[0] && color[2]>40 && color[3]===255,'decoded fixture pixels: '+color);
     assert(corner[0]>corner[2]+50,'red marker must remain at top-left: '+corner);
     helper.stdin.write('c');
+    } else console.log('[native-browser] GPU pixels are covered by the required standalone browser job');
     assert.equal(await page.locator('video,img').count(),0);
     // Actual service loss: retain the last image, back off, recover new sockets.
     progress('native service loss and restart');
@@ -189,7 +191,8 @@ assert(Number.isInteger(fps) && fps >= 1 && fps <= 60);
     helper.stdin.write('f');
     await waitFor(()=>showcaseDiagnostics().displayed && showcaseDiagnostics().drawnFrames>2,null,{timeout:20000});
     assert.deepEqual(pageErrors, []);
-    console.log(`PASS (${useTLS?'HTTPS/WSS':'HTTP/WS'}, ${profile} ${width}x${height}): pixels/crop/orientation, touch, static flush, reconnect, foreground without a new VideoConfig`);
+    const pictureChecks=process.env.SHOWCASE_TEST_GPU_READBACK==='0'?'decode/draw (GPU pixels in browser job)':'pixels/crop/orientation';
+    console.log(`PASS (${useTLS?'HTTPS/WSS':'HTTP/WS'}, ${profile} ${width}x${height}): ${pictureChecks}, touch, static flush, reconnect, foreground without a new VideoConfig`);
   } catch(error) {
     console.error('Playback diagnostics:',await bounded(page?.evaluate(()=>JSON.stringify(window.showcaseDiagnostics?.())),'diagnostics',5000).catch(()=> 'page unavailable'));
     console.error('Bridge stderr:',stderr.slice(-6000),'Bridge output:',output.slice(-2000));

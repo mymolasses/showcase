@@ -3,6 +3,8 @@ const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('n
 const http=require('node:http'),https=require('node:https'),crypto=require('node:crypto'),os=require('node:os');
 const {once}=require('node:events'),{execFileSync}=require('node:child_process'),{chromium}=require('playwright');
 const root=path.resolve(__dirname,'..');
+const width=Number(process.env.SHOWCASE_TEST_WIDTH || 640),height=Number(process.env.SHOWCASE_TEST_HEIGHT || 360);
+assert(Number.isInteger(width)&&width>=320&&width<=1920&&Number.isInteger(height)&&height>=180&&height<=1080);
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 function wire(data){
   const b=Buffer.from(data),h=Buffer.alloc(b.length<126?2:b.length<65536?4:10);h[0]=0x82;
@@ -21,9 +23,9 @@ function wire(data){
     tlsOptions={key:fs.readFileSync(path.join(work,'key.pem')),cert:fs.readFileSync(path.join(work,'cert.pem'))};
     spki=crypto.createHash('sha256').update(new crypto.X509Certificate(tlsOptions.cert).publicKey.export({type:'spki',format:'der'})).digest('base64');
   }
-  const config=()=>{const h=Buffer.alloc(9);h[0]=1;h.writeUInt32BE(generation,1);h.writeUInt16BE(640,5);h.writeUInt16BE(360,7);return Buffer.concat([h,Buffer.from(description)]);};
+  const config=()=>{const h=Buffer.alloc(9);h[0]=1;h.writeUInt32BE(generation,1);h.writeUInt16BE(width,5);h.writeUInt16BE(height,7);return Buffer.concat([h,Buffer.from(description)]);};
   const handler=(req,res)=>{
-    if(req.url==='/status'){res.setHeader('Content-Type','application/json');res.end(JSON.stringify({active:true,configured:true,width:640,height:360,generation,viewers:media.size,controllers:controls.size,receivedFrames:sequence,frameAgeMs:flowing?10:5000,version:'test',build:'worker'}));return;}
+    if(req.url==='/status'){res.setHeader('Content-Type','application/json');res.end(JSON.stringify({active:true,configured:true,width,height,generation,viewers:media.size,controllers:controls.size,receivedFrames:sequence,frameAgeMs:flowing?10:5000,version:'test',build:'worker'}));return;}
     const file=path.join(root,'web',req.url==='/'?'index.html':req.url.slice(1));
     if(req.url.includes('..')||!fs.existsSync(file)){res.writeHead(404);res.end();return;}
     res.setHeader('Content-Type',file.endsWith('.js')?'application/javascript':'text/html');
@@ -59,16 +61,16 @@ function wire(data){
     const redPixel=()=>mediaWorker.evaluate(()=>{const p=new Uint8Array(4);gl.readPixels(10,canvas.height-11,1,1,gl.RGBA,gl.UNSIGNED_BYTE,p);return [...p];});
     const base=`${tls?'https':'http'}://127.0.0.1:${port}`;await page.goto(base+'/status');
     for(const profile of ['baseline','main','high']){
-      const encoded=await page.evaluate(async profile=>{
-        const codec={baseline:'avc1.42001e',main:'avc1.4d001e',high:'avc1.64001e'}[profile];
+      const encoded=await page.evaluate(async({profile,width,height})=>{
+        const codec='avc1.'+{baseline:'4200',main:'4d00',high:'6400'}[profile]+(width*height>640*360?'2a':'1e');
         const frames=[];let description;
         const encoder=new VideoEncoder({output(chunk,meta){const b=new Uint8Array(chunk.byteLength);chunk.copyTo(b);frames.push({key:chunk.type==='key',bytes:[...b]});if(meta.decoderConfig?.description)description=[...new Uint8Array(meta.decoderConfig.description)];},error:e=>{throw e;}});
-        encoder.configure({codec,width:640,height:360,framerate:30,bitrate:1500000,latencyMode:'realtime',avc:{format:'avc'}});
-        const c=document.createElement('canvas');c.width=640;c.height=360;const ctx=c.getContext('2d');
-        for(let n=0;n<60;n++){ctx.fillStyle='#183960';ctx.fillRect(0,0,640,360);ctx.fillStyle='#ee3020';ctx.fillRect(0,0,50,50);ctx.fillStyle='#20e080';ctx.fillRect(200+n*4,120,70,70);
+        encoder.configure({codec,width,height,framerate:30,bitrate:6000000,latencyMode:'realtime',avc:{format:'avc'}});
+        const c=document.createElement('canvas');c.width=width;c.height=height;const ctx=c.getContext('2d');
+        for(let n=0;n<60;n++){ctx.fillStyle='#183960';ctx.fillRect(0,0,width,height);ctx.fillStyle='#ee3020';ctx.fillRect(0,0,50,50);ctx.fillStyle='#20e080';ctx.fillRect(200+n*4,120,70,70);
           const f=new VideoFrame(c,{timestamp:Math.round(n*1e6/30)});encoder.encode(f,{keyFrame:n%30===0});f.close();}
         await encoder.flush();encoder.close();return{description,frames};
-      },profile);
+      },{profile,width,height});
       description=encoded.description;frames=encoded.frames;sequence=0;generation++;flowing=true;
       assert.equal(description[1],{baseline:66,main:77,high:100}[profile]);
       timer=setInterval(()=>{
@@ -88,7 +90,7 @@ function wire(data){
       assert.equal(await page.evaluate(()=>showcaseDiagnostics().drawnFrames),snapshot,'a timer must not report static frames');assert.equal(mediaConnections,before);
       flowing=true;sequence=Math.ceil(sequence/30)*30;
       await page.waitForFunction(n=>showcaseDiagnostics().drawnFrames>n,snapshot);
-      await page.mouse.click(500,400);await sleep(100);assert(touches.some(m=>m.phase===0&&m.x===320&&m.y===180),'touch uses source coordinates');
+      await page.mouse.click(500,400);await sleep(100);assert(touches.some(m=>m.phase===0&&m.x===width/2&&m.y===height/2),'touch uses source coordinates');
       await page.mouse.move(500,400);await page.mouse.down();await sleep(900);assert(touches.some(m=>m.type==='hold'));await page.evaluate(()=>window.dispatchEvent(new Event('blur')));await page.mouse.up();
       await page.click('#menu');await page.click('#reconnect');await ready();
       const reconnected=mediaConnections;
@@ -101,7 +103,7 @@ function wire(data){
       const retained=await redPixel();
       assert(retained[0]>retained[2]+100 && retained[3]===255,'the original GPU canvas retains real pixels after disconnect');
       clearInterval(timer);timer=null;
-      console.log('PASS: '+(tls?'HTTPS/WSS':'loopback HTTP/WS')+' '+profile+' real H.264, Worker/WebGL pixels, static screen, touch/hold, reconnect and retained image');
+      console.log('PASS: '+(tls?'HTTPS/WSS':'loopback HTTP/WS')+' '+profile+' '+width+'x'+height+' at 30 fps source, real H.264, Worker/WebGL pixels, static screen, touch/hold, reconnect and retained image');
       await page.goto(base+'/status');await sleep(200);
     }
     if(!tls){
