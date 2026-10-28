@@ -84,10 +84,6 @@ const width = fullHD ? 1920 : 1600, height = fullHD ? 1080 : 900;
     const pageErrors = [];
     const connections=role=>stderr.split('[BROWSER] '+role+' connected').length-1;
     page.on('pageerror', error => pageErrors.push(error.message));
-    page.on('websocket', socket => {
-      if (socket.url().endsWith('/media')) mediaConnections++;
-      if (socket.url().endsWith('/control')) controls++;
-    });
     await page.goto(useTLS ? `https://${domain}:${tlsPort}/` : `http://127.0.0.1:${frontPort}/`);
     assert.equal(await page.locator('input').count(), 0);
     await page.waitForFunction(()=>window.showcaseDiagnostics?.().displayed && showcaseDiagnostics().drawnFrames>2,null,{timeout:20000});
