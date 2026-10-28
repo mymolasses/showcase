@@ -256,7 +256,7 @@ def main():
             continue
         lines.append(key + ': ' + updates[key] if key in updates else line)
     lines += ['Description: Unofficial foreground CarPlay browser prototype for rootless iOS 16.2+.',
-              ' Adds JPEG, WebCodecs, software and WebRTC browser output with touch.',
+              ' Single HTTPS/WSS WebCodecs Worker browser output with touch.',
               ' Built for testing with iPhone 14 Pro Max / Dopamine rootless.',
               ' Hardware compatibility remains unverified. Based on Showcase Beta 5-2.']
     replace(control, 'control', ('\n'.join(lines).rstrip() + '\n').encode(), 0o644)

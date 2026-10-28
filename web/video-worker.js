@@ -58,7 +58,7 @@ function shader(type,source) {
   return item;
 }
 function initGL() {
-  // Preserve the last picture for static maps and reconnect snapshots.
+  // Keep the last picture for static maps and transport reconnection.
   gl=canvas.getContext('webgl2',{desynchronized:true,antialias:false,depth:false,stencil:false,
     alpha:false,powerPreference:'high-performance',preserveDrawingBuffer:true});
   if (!gl) throw Error('浏览器无法创建 WebGL2 图形上下文');
