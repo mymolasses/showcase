@@ -8,8 +8,8 @@
   let epoch=0, retry=0, reconnectTimer=null, socketTimer=null, startupTimer=null, statusBusy=false, pointer=null;
   let pendingMove=null, moveFrame=null, lastKeyRequest=-Infinity, failures=[], server=null;
   const metrics={received:0,bytes:0,drawn:0,reconnects:0,recoveries:0,lastReason:'首次连接',lastDrawAt:null,lastFailure:null};
-  const state=message=>{$('state').textContent=message;};
-  const notice=message=>{$('notice').textContent=message;$('notice').hidden=!message;};
+  const state=message=>{if($('state').textContent!==message)$('state').textContent=message;};
+  const notice=message=>{if($('notice').textContent!==message)$('notice').textContent=message;$('notice').hidden=!message;};
   function measureViewport() {
     const rect=surface.getBoundingClientRect(), visual=window.visualViewport;
     const width=Math.min(window.innerWidth || rect.width,visual?.width || Infinity);
@@ -133,8 +133,9 @@
         onProgress(delta){if(current!==epoch)return;metrics.received+=Math.max(0,delta.received);metrics.bytes+=Math.max(0,delta.bytes);metrics.drawn+=Math.max(0,delta.drawn);},
         onFrame(){
           if(current!==epoch || !config)return;
-          displayed=true;poster.hidden=true;retry=0;metrics.lastDrawAt=performance.now();notice('');
-          clearTimeout(startupTimer);startupTimer=null;state(`CarPlay · ${config.width} × ${config.height} · ${backends.label}`);
+          const first=!displayed;displayed=true;retry=0;metrics.lastDrawAt=performance.now();
+          if(first || !$('notice').hidden){poster.hidden=true;notice('');clearTimeout(startupTimer);startupTimer=null;}
+          state(`CarPlay · ${config.width} × ${config.height} · ${backends.label}`);
         },
         onError(reason,fatal){if(current===epoch)setTimeout(()=>{if(current===epoch)recover(reason,fatal);},0);}
       });

@@ -13,12 +13,14 @@
     const reason = unsupported(); if (reason) throw Error(reason);
     const canvas = document.createElement('canvas');
     canvas.width = canvas.height = 1; options.container.replaceChildren(canvas);
-    let worker = null, closed = false, lastDrawAt = null, lastInputAt = null;
+    let worker = null, closed = false, closeTimer = null, lastDrawAt = null, lastInputAt = null;
+    const terminate=()=>{clearTimeout(closeTimer);worker?.terminate();worker=null;};
     let counters = {inputFrames:0,drawnFrames:0,bytes:0,droppedFrames:0,waitingKey:true,decodeQueue:0};
     try {
       const offscreen = canvas.transferControlToOffscreen();
       worker = new Worker('/video-worker.js');
       worker.onmessage = ({data}) => {
+        if (data.type === 'closed') { terminate();return; }
         if (closed) return;
         if (data.type === 'error') { options.onError(data.message, data.fatal); return; }
         if (data.type === 'open') options.onOpen();
@@ -43,7 +45,12 @@
       stats() { return {...counters,renderer:'webcodecs-worker',lastDrawAgeMs:lastDrawAt===null?null:performance.now()-lastDrawAt,
         lastInputAgeMs:lastInputAt===null?null:performance.now()-lastInputAt}; },
       snapshotSource: () => canvas,
-      close() { if (closed) return; closed=true; worker.terminate(); worker=null; }
+      close() {
+        if (closed) return; closed=true;
+        if(!worker)return;
+        worker.postMessage({type:'close'});
+        closeTimer=setTimeout(terminate,1000);
+      }
     };
   }
   window.ShowcaseRenderers = {label,unsupported,create};

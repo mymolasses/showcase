@@ -38,7 +38,11 @@ function stop() {
   clearInterval(statsTimer);clearInterval(pingTimer);clearTimeout(connectionTimer);
   if (socket) { socket.onclose=socket.onerror=socket.onmessage=null; socket.close(); socket=null; }
   closeDecoder();
-  if (gl) { gl.deleteTexture(texture);gl.deleteBuffer(vertexBuffer);gl.deleteBuffer(uvBuffer);gl.deleteProgram(program); }
+  if (gl) {
+    gl.deleteTexture(texture);gl.deleteBuffer(vertexBuffer);gl.deleteBuffer(uvBuffer);gl.deleteProgram(program);
+    gl.getExtension('WEBGL_lose_context')?.loseContext();
+  }
+  self.postMessage({type:'closed'});self.close?.();
 }
 function fail(message,fatal=false) {
   if (stopped) return;

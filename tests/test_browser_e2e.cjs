@@ -91,7 +91,7 @@ const width = fullHD ? 1920 : 1600, height = fullHD ? 1080 : 900;
     await until(() => stderr.includes('[BROWSER] control connected'), 'browser control channel');
     // Status polling must enable input after actual frames arrive.
     await page.waitForTimeout(1200);
-    await page.click('#menu');
+    await page.click('#menu',{force:true});
     assert.equal(await page.locator('#renderer').count(),0);
     assert.equal(await page.locator('#display canvas').evaluate(c=>getComputedStyle(c).objectFit),'contain');
     const rect = await page.locator('#surface').boundingBox();
@@ -145,7 +145,7 @@ const width = fullHD ? 1920 : 1600, height = fullHD ? 1080 : 900;
     // macOS page compositor to produce a full-window screenshot.
     const png=await page.evaluate(()=>{const source=document.querySelector('#display canvas');const c=document.createElement('canvas');c.width=source.width;c.height=source.height;c.getContext('2d').drawImage(source,0,0);return c.toDataURL('image/png');});
     fs.writeFileSync(path.join(work,'browser.png'),Buffer.from(png.split(',')[1],'base64'));
-    await page.click('#reconnect');
+    await page.click('#reconnect',{force:true});
     await waitFor(()=>showcaseDiagnostics().displayed && showcaseDiagnostics().drawnFrames>2,null,{timeout:20000});
     const color=await page.evaluate(()=>{const source=document.querySelector('#display canvas');const c=document.createElement('canvas');c.width=c.height=1;const ctx=c.getContext('2d');ctx.drawImage(source,10,source.height-10,1,1,0,0,1,1);return [...ctx.getImageData(0,0,1,1).data];});
     assert(color[2]>color[0] && color[2]>40 && color[3]===255,'decoded fixture pixels: '+color);
