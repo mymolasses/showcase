@@ -130,7 +130,8 @@ const width = fullHD ? 1920 : 1600, height = fullHD ? 1080 : 900;
     await page.waitForTimeout(100);
     assert.equal(connections('media'), 1);
     helper.stdin.write('tc');
-    await page.waitForFunction(time=>showcaseDiagnostics().drawnFrames>time,initialTime,{timeout:15000});
+    assert(Number.isFinite(initialTime),'resume baseline must be a frame count');
+    await page.waitForFunction(time=>showcaseDiagnostics().drawnFrames>time,initialTime,{timeout:15000,polling:100});
     for (let i = 0; i < 8; i++) {
       helper.stdin.write('r'); await page.waitForTimeout(1500);
     }
