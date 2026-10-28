@@ -34,6 +34,8 @@ const width = fullHD ? 1920 : 1600, height = fullHD ? 1080 : 900;
     server.listen(0, '127.0.0.1'); await once(server, 'listening');
     browser = await chromium.launch({executablePath: process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', headless: true, args: ['--enable-unsafe-swiftshader','--use-angle=swiftshader','--no-proxy-server', ...(useTLS ? ['--host-resolver-rules=MAP '+domain+' 127.0.0.1', '--ignore-certificate-errors-spki-list='+certificate.spki] : [])]});
     page = await browser.newPage({viewport: {width: 1280, height: 900}});
+    // Worker rendering must not depend on main-page animation callbacks.
+    const waitFor=(fn,arg,options={})=>page.waitForFunction(fn,arg,{polling:100,...options});
     await page.goto(`http://127.0.0.1:${server.address().port}`);
     const encoded = await page.evaluate(async ({codec,width,height}) => {
       if (!window.VideoEncoder) throw Error('Chrome WebCodecs encoder unavailable');
@@ -85,7 +87,7 @@ const width = fullHD ? 1920 : 1600, height = fullHD ? 1080 : 900;
     page.on('pageerror', error => pageErrors.push(error.message));
     await page.goto(useTLS ? `https://${domain}:${tlsPort}/` : `http://127.0.0.1:${frontPort}/`);
     assert.equal(await page.locator('input').count(), 0);
-    await page.waitForFunction(()=>window.showcaseDiagnostics?.().displayed && showcaseDiagnostics().drawnFrames>2,null,{timeout:20000});
+    await waitFor(()=>window.showcaseDiagnostics?.().displayed && showcaseDiagnostics().drawnFrames>2,null,{timeout:20000});
     await until(() => stderr.includes('[BROWSER] control connected'), 'browser control channel');
     // Status polling must enable input after actual frames arrive.
     await page.waitForTimeout(1200);
@@ -131,7 +133,7 @@ const width = fullHD ? 1920 : 1600, height = fullHD ? 1080 : 900;
     assert.equal(connections('media'), 1);
     helper.stdin.write('tc');
     assert(Number.isFinite(initialTime),'resume baseline must be a frame count');
-    await page.waitForFunction(time=>showcaseDiagnostics().drawnFrames>time,initialTime,{timeout:15000,polling:100});
+    await waitFor(time=>showcaseDiagnostics().drawnFrames>time,initialTime,{timeout:15000,polling:100});
     for (let i = 0; i < 8; i++) {
       helper.stdin.write('r'); await page.waitForTimeout(1500);
     }
@@ -139,9 +141,12 @@ const width = fullHD ? 1920 : 1600, height = fullHD ? 1080 : 900;
     assert.equal(connections('control'), 1);
     assert.equal(await page.locator('#poster').isVisible(), false);
     assert.equal(await page.locator('#notice').isVisible(), false);
-    await page.screenshot({path: path.join(work, 'browser.png')});
+    // Capture the actual decoded canvas rather than waiting for the headless
+    // macOS page compositor to produce a full-window screenshot.
+    const png=await page.evaluate(()=>{const source=document.querySelector('#display canvas');const c=document.createElement('canvas');c.width=source.width;c.height=source.height;c.getContext('2d').drawImage(source,0,0);return c.toDataURL('image/png');});
+    fs.writeFileSync(path.join(work,'browser.png'),Buffer.from(png.split(',')[1],'base64'));
     await page.click('#reconnect');
-    await page.waitForFunction(()=>showcaseDiagnostics().displayed && showcaseDiagnostics().drawnFrames>2,null,{timeout:20000});
+    await waitFor(()=>showcaseDiagnostics().displayed && showcaseDiagnostics().drawnFrames>2,null,{timeout:20000});
     const color=await page.evaluate(()=>{const source=document.querySelector('#display canvas');const c=document.createElement('canvas');c.width=c.height=1;const ctx=c.getContext('2d');ctx.drawImage(source,10,source.height-10,1,1,0,0,1,1);return [...ctx.getImageData(0,0,1,1).data];});
     assert(color[2]>color[0] && color[2]>40 && color[3]===255,'decoded fixture pixels: '+color);
     const corner=await page.evaluate(()=>{const source=document.querySelector('#display canvas');const c=document.createElement('canvas');c.width=c.height=1;const ctx=c.getContext('2d');ctx.drawImage(source,source.width/64,source.height/36,1,1,0,0,1,1);return [...ctx.getImageData(0,0,1,1).data];});
@@ -149,19 +154,19 @@ const width = fullHD ? 1920 : 1600, height = fullHD ? 1080 : 900;
     assert.equal(await page.locator('video,img').count(),0);
     // Actual service loss: retain the last image, back off, recover new sockets.
     helper.stdin.write('q'); await once(helper, 'exit');
-    await page.waitForFunction(() => document.querySelector('#state').textContent.includes('重试'));
+    await waitFor(() => document.querySelector('#state').textContent.includes('重试'));
     assert.equal(await page.locator('#poster').isVisible(), true);
     helper = spawn(path.join(work, 'bridge'), [String(port), fixture, `${width}x${height}`], {stdio: ['pipe', 'pipe', 'pipe']});
     helper.stdout.on('data', bytes => { output += bytes.toString(); });
     helper.stderr.on('data', bytes => { stderr += bytes.toString(); });
-    await page.waitForFunction(()=>showcaseDiagnostics().displayed && showcaseDiagnostics().drawnFrames>2,null,{timeout:20000});
+    await waitFor(()=>showcaseDiagnostics().displayed && showcaseDiagnostics().drawnFrames>2,null,{timeout:20000});
     helper.stdin.write('b');
-    await page.waitForFunction(() => document.querySelector('#notice').textContent.includes('前台'));
+    await waitFor(() => document.querySelector('#notice').textContent.includes('前台'));
     helper.stdin.write('f');
-    await page.waitForFunction(()=>showcaseDiagnostics().displayed && showcaseDiagnostics().drawnFrames>2,null,{timeout:20000});
+    await waitFor(()=>showcaseDiagnostics().displayed && showcaseDiagnostics().drawnFrames>2,null,{timeout:20000});
     assert.deepEqual(pageErrors, []);
     console.log(`PASS (${useTLS?'HTTPS/WSS':'HTTP/WS'}, ${profile} ${width}x${height}): pixels/crop/orientation, touch, static flush, reconnect, foreground without a new VideoConfig`);
-    console.log('Synthetic screenshot:', path.join(work, 'browser.png'));
+    console.log('Synthetic decoded canvas:', path.join(work, 'browser.png'));
   } catch(error) {
     console.error('Playback diagnostics:',await page?.evaluate(()=>JSON.stringify(window.showcaseDiagnostics?.())).catch(()=> 'page unavailable'));
     console.error('Bridge stderr:',stderr.slice(-6000),'Bridge output:',output.slice(-2000));
