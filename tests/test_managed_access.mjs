@@ -43,15 +43,20 @@ test('activation atomically binds one device, retries are idempotent and revocat
   const {activationCode}=enrollment.data,deviceNonce='1'.repeat(64);
   const [a,b]=await Promise.all([f.call('/v1/activate',null,{activationCode,deviceNonce}),
     f.call('/v1/activate',null,{activationCode,deviceNonce:'2'.repeat(64)})]);
-  assert.equal(a.status,200);assert.equal(b.status,403);
-  const again=await f.call('/v1/activate',null,{activationCode,deviceNonce});
-  assert.equal(again.data.clientToken,a.data.clientToken);
-  assert.equal((await f.call('/v1/identity',a.data.clientToken)).data.pkcs12Base64,f.identity.pkcs12Base64);
-  assert(!JSON.stringify([...f.records]).includes(a.data.clientToken),'only token hashes are stored');
+  // Request parsing and Web Crypto may finish in either order. Exactly one
+  // device must win; subsequent requests must retain that device's binding.
+  assert.deepEqual([a.status,b.status].sort(),[200,403]);
+  const winner=a.status===200?a:b,winnerNonce=a.status===200?deviceNonce:'2'.repeat(64);
+  const loserNonce=a.status===200?'2'.repeat(64):deviceNonce;
+  const again=await f.call('/v1/activate',null,{activationCode,deviceNonce:winnerNonce});
+  assert.equal(again.status,200);assert.equal(again.data.clientToken,winner.data.clientToken);
+  assert.equal((await f.call('/v1/activate',null,{activationCode,deviceNonce:loserNonce})).status,403);
+  assert.equal((await f.call('/v1/identity',winner.data.clientToken)).data.pkcs12Base64,f.identity.pkcs12Base64);
+  assert(!JSON.stringify([...f.records]).includes(winner.data.clientToken),'only token hashes are stored');
   assert(!JSON.stringify([...f.records]).includes(activationCode),'activation code remains private');
-  await f.call('/admin/clients/revoke',f.env.ADMIN_TOKEN,{clientId:a.data.clientId});
-  assert.equal((await f.call('/v1/identity',a.data.clientToken)).status,401);
-  assert.equal((await f.call('/v1/activate',null,{activationCode,deviceNonce})).status,403);
+  await f.call('/admin/clients/revoke',f.env.ADMIN_TOKEN,{clientId:winner.data.clientId});
+  assert.equal((await f.call('/v1/identity',winner.data.clientToken)).status,401);
+  assert.equal((await f.call('/v1/activate',null,{activationCode,deviceNonce:winnerNonce})).status,403);
 });
 test('DNS hook can modify only its own exact challenge and preserves externally changed records',async()=>{
   const f=fixture(),request={domain:f.env.DOMAIN,validation:'v'.repeat(43)};

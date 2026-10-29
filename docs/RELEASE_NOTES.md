@@ -1,4 +1,8 @@
-# Showcase+ 1.6.0 / 1016
+# Showcase+ 1.6.1 / 1017
+
+- Correct the concurrent activation regression test to accept either request completing first while requiring exactly one device binding, idempotent retries and persistent revocation. Application behavior is unchanged from 1.6.0.
+
+## 1.6.0 / 1016
 
 - Add device-bound activation and automatic trusted-certificate refresh for car.littlepond.eu.org.
 - Check for updates on launch/foreground and every six hours while the app runs; keep a validated local certificate through service/network failures.
