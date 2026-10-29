@@ -13,7 +13,7 @@ ROOT=Path(__file__).resolve().parents[1]
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action',choices=['seed','status','smoke-test'])
+    parser.add_argument('action',choices=['seed','status','smoke-test','begin-update-probe','verify-update-probe'])
     parser.add_argument('--service-state',type=Path,default=ROOT/'.private/managed-service/service.json')
     parser.add_argument('--identity-directory',type=Path,default=ROOT/'.private/personal-tls')
     args=parser.parse_args();state=json.loads(args.service_state.read_text())
@@ -32,6 +32,25 @@ def main():
         if result.get('ok') is not True:raise RuntimeError('Identity seed failed')
         print('Seeded verified personal identity; expires '+result['notAfter'])
     elif args.action=='status':print(json.dumps(call('/admin/status')))
+    elif args.action=='begin-update-probe':
+        enrollment=call('/admin/enrollments','ADMIN_TOKEN',{'expiresIn':900})
+        activation={'activationCode':enrollment['activationCode'],'deviceNonce':secrets.token_hex(32)}
+        identity=read_json(Request(ORIGIN+'/v1/activate',data=json.dumps(activation).encode(),headers={'Content-Type':'application/json'}))
+        probe=args.service_state.parent/'rotation-probe.json'
+        probe.write_text(json.dumps({key:identity[key] for key in ['clientToken','clientId','fingerprint']}));probe.chmod(0o600)
+        print('Prepared a private test device authorization before renewal; credential values not printed')
+    elif args.action=='verify-update-probe':
+        probe=args.service_state.parent/'rotation-probe.json';previous=json.loads(probe.read_text())
+        try:
+            current=call('/v1/identity',token=previous['clientToken'])
+            if current['domain']!=DOMAIN or current['fingerprint']==previous['fingerprint']:
+                raise RuntimeError('The existing client did not receive a replacement identity')
+            report={'sameClientAuthorization':True,'previousFingerprint':previous['fingerprint'],
+                'replacementFingerprint':current['fingerprint'],'notAfter':current['notAfter']}
+            (args.service_state.parent/'live-rotation-report.json').write_text(json.dumps(report,indent=2))
+            print('PASS: the same enrolled client downloaded a different renewed certificate without reactivation or reinstall')
+        finally:
+            call('/admin/clients/revoke','ADMIN_TOKEN',{'clientId':previous['clientId']});probe.unlink()
     else:
         enrollment=call('/admin/enrollments','ADMIN_TOKEN',{'expiresIn':900})
         activation={'activationCode':enrollment['activationCode'],'deviceNonce':secrets.token_hex(32)}

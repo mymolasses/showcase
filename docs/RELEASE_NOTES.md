@@ -5,6 +5,8 @@
 - Apply certificate updates to new HTTPS connections without restarting the app or closing existing WSS sessions.
 - Keep DNS credentials on the dedicated service. Personal packages contain a short-lived activation code; public build artifacts contain no certificate private key or access token.
 - Automatic issuance runs separately from app releases and does not require reinstalling after each renewal. Initial activation requires the personal 1.6.0 package.
+- The dedicated updater runs on the existing VPS; its daily timer and authenticated identity rotation were verified with real certificates.
+- Add validated original-directory certificate deployment hooks for the existing site, including backups and Nginx reload/start after Certbot or successful manual ACME renewal.
 - Target iPhone and Tesla validation remain required.
 
 ## 1.5.0 / 1015

@@ -22,6 +22,14 @@ outside the service's deployment paths.
 The files `vps-nginx.conf`, `vps-renew.service`, `vps-renew.timer`, and
 `vps-nginx-renew-hook.sh` describe the separate virtual host and renewal units.
 
+The original site's requested certificate-copy step uses
+`install-root-certificate.py` and `root-certbot-renew-hook.sh`. Its legacy ACME
+client writes to private staging before invoking the same validated installer.
+The handler preserves the original active directory, checks trust and key
+pairing, backs up prior files, prevents older certificates replacing newer ones,
+and reloads or starts Nginx. Managed reloads share a lock. The root site's
+certificate remains separate from the car hostname's identity.
+
 ## Optional Cloudflare deployment
 
 `car.littlepond.eu.org` stays DNS-only at 99.99.99.99. The iPhone's existing

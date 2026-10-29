@@ -1,37 +1,27 @@
-# Personal hotspot HTTPS entry
+# Personal hotspot HTTPS and automatic renewal
 
-On 2026-10-29, the personal entry was configured as
-`https://car.littlepond.eu.org/`. Cloudflare has a DNS-only A record pointing to
-`99.99.99.99`. Keep the browser URL as the domain: the issued certificate covers
-`car.littlepond.eu.org`, not the numeric IP address.
+The personal CarPlay entry is `https://car.littlepond.eu.org/`. Its DNS-only A record points to 99.99.99.99. Use the domain URL: the certificate covers that hostname, not the numeric IP. The existing local /32 route and HTTPS/WSS relay remain in use; this change does not add a system VPN.
 
-The verified 1.5.0 / 1015 app already provides the local `/32` alias and HTTPS
-443 / same-origin WSS relay. This package uses that existing implementation.
-It does not include a system VPN. Reachability from an actual Tesla connected
-to the iPhone hotspot still needs hardware verification.
+## Personal 1.6.0 / 1016 installer
 
-A Let's Encrypt certificate was issued using DNS-01 and its complete chain was
-verified against system trust. It expires at **2027-01-27 07:19:03 UTC**. Its
-provided chain reaches ISRG Root X1 through a cross-signed Root YR certificate.
-Certificate acceptance on the target iPhone and Tesla remains untested.
+The private installer under `.private/personal-package/` contains a one-use, device-bound activation profile. It includes no DNS credential or certificate private key. Install this update once, then first open it within seven days to activate. Future certificate renewals require no package reinstall.
 
-`tools/personalize_tls_deb.py` adds the identity and configuration to the verified
-1.5.0 package without changing any original runtime bytes or app bundle files.
-The install hook writes the P12 and domain/password JSON to
-`/var/mobile/Library/Showcase/` with mode 0600 and mobile ownership. If prior
-files exist, their first backup is retained with `.before-personal` appended.
+The phone downloads and validates its trusted P12 identity through authenticated HTTPS. It saves the identity in `/var/mobile/Library/Showcase/browser-managed-identity.json` and device authorization in `browser-managed-client.json`, both mode 0600. It checks on launch/foreground and every six hours while running, retaining a usable cached identity on network failures. iOS suspension is not background polling: the next launch catches up. New HTTPS handshakes use the new identity while existing WSS sessions continue. Invalid identities cannot replace the active certificate.
 
-The private personal package is under `.private/personal-package/`. It contains
-the certificate private key and must never be published to the public repository,
-GitHub Releases, or public Actions artifacts. No Cloudflare API token is included.
-Checksums, certificate metadata, and original-payload equality were verified.
+The earlier manual 1.5.0 installer wrote `browser-server.p12` and `browser-web.json` in the same directory. Those remain a manual fallback; a validated managed identity takes precedence in 1.6.0.
 
-Install the personal package on the existing Dopamine rootless iPhone, reopen
-Showcase+, and enable Browser Output and Browser Network Probe under Display.
-Start CarPlay, connect the Tesla to the iPhone hotspot, and open the domain URL.
-Check Network Status if HTTPS does not become ready. Do not bypass TLS warnings.
+## Server deployment
 
-Certificate renewal is not automatic in this personal package. Renew via DNS-01,
-then rebuild and reinstall the personal package before expiry. The separate
-managed-access implementation remains work in progress and was not deployed for
-this setup.
+The original VPS hosts an independent `showcase-access` container behind Nginx at `https://setup.littlepond.eu.org`. State lives privately in `/var/lib/showcase-access/`; the zone DNS credential is in root-only `/etc/showcase-access/service.env`, not on the phone or GitHub. Public app builds contain no activation credential, private P12 or DNS token.
+
+`showcase-certificate-renew.timer` checks daily at 11:17 Hong Kong time and renews when fewer than 35 days remain. DNS-01 modifies only its owned `_acme-challenge.car` TXT records. A real issuance/publication succeeded; a client enrolled before renewal downloaded a different identity with the same authorization afterward. The timer is enabled and its service check succeeded. The unused private GitHub scheduler is disabled.
+
+The setup hostname uses existing Certbot HTTP webroot validation. Its deploy hook validates and reloads Nginx after renewal.
+
+## Original site's certificate directory
+
+The original site keeps its own certificate. Certbot deployment and successful manual `acme.sh --renew -d littlepond.eu.org --ecc` invoke a shared validated installer. ACME writes to private staging first. The installer verifies public trust, hostname, lifetime and key pairing, preserves a newer active certificate, backs up prior files, and deploys the matching full chain and key to `/etc/v2ray-agent/tls/littlepond.eu.org.crt` and `.key`. It validates Nginx and reloads it, or starts it if stopped. Failed application rolls back.
+
+The original site's Certbot staging renewal and deployment hook succeeded. Its externally served certificate fingerprint was verified against the newly installed certificate and the site returned HTTP 200. Private keys remained on the VPS.
+
+Native updater, TLS hot reload, retained WSS, source provenance and package checks passed. Target iPhone and Tesla operation still require hardware testing; desktop/server checks do not establish D-gear behavior.

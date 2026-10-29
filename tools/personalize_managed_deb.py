@@ -42,7 +42,21 @@ def personalize(base, output, enrollment):
     package.replace(control,'md5sums',md5.encode(),0o644)
     output.parent.mkdir(parents=True,exist_ok=True)
     package.write_deb(output,control,payload)
-    package.validate_directory_order(package.ar_members(output.read_bytes())['data.tar.gz'])
+    output.chmod(0o600)
+    rebuilt=package.ar_members(output.read_bytes())
+    package.validate_directory_order(rebuilt['data.tar.gz'])
+    installed=package.tar_members(rebuilt['data.tar.gz'])
+    original=package.tar_members(members['data.tar.gz'])
+    for name,(member,data) in original.items():
+        if installed[name][1]!=data or installed[name][0].mode!=member.mode:
+            raise ValueError('Original runtime changed: '+name)
+    if installed[package.APP+'ShowcaseAccess.json'][0].mode!=0o600:
+        raise ValueError('Activation profile permissions are not private')
+    rebuilt_control=package.tar_members(rebuilt['control.tar.gz'])
+    for line in rebuilt_control['md5sums'][1].decode().splitlines():
+        digest,name=line.split('  ',1)
+        if hashlib.md5(installed[name][1]).hexdigest()!=digest:
+            raise ValueError('Personal package integrity mismatch')
     checksum=hashlib.sha256(output.read_bytes()).hexdigest()
     output.with_suffix(output.suffix+'.sha256').write_text(checksum+'  '+output.name+'\n')
     return checksum
