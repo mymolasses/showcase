@@ -10,6 +10,7 @@ import argparse
 import base64
 import json
 import os
+import re
 import secrets
 import shlex
 import ssl
@@ -75,7 +76,8 @@ def renew(force=False):
     with tempfile.TemporaryDirectory(prefix='showcase-certificate-') as work:
         root = Path(work)
         hook = shlex.quote(sys.executable) + ' ' + shlex.quote(str(Path(__file__).resolve()))
-        subprocess.run([sys.executable, '-m', 'certbot', 'certonly', '--non-interactive', '--agree-tos',
+        certbot = [os.environ['SHOWCASE_CERTBOT_BIN']] if os.environ.get('SHOWCASE_CERTBOT_BIN') else [sys.executable, '-m', 'certbot']
+        subprocess.run([*certbot, 'certonly', '--non-interactive', '--agree-tos',
             '--register-unsafely-without-email', '--manual', '--preferred-challenges', 'dns',
             '--manual-auth-hook', hook + ' --hook-auth', '--manual-cleanup-hook', hook + ' --hook-cleanup',
             '--key-type', 'rsa', '--rsa-key-size', '2048', '-d', DOMAIN,
@@ -88,7 +90,10 @@ def renew(force=False):
         fingerprint = subprocess.check_output(['openssl', 'x509', '-in', str(live/'cert.pem'), '-noout', '-fingerprint', '-sha256'], text=True).strip().split('=', 1)[1].replace(':', '').lower()
         password = secrets.token_urlsafe(32)
         environment = {**os.environ, 'SHOWCASE_P12_PASSWORD': password}
-        subprocess.run(['openssl', 'pkcs12', '-export', '-legacy', '-inkey', str(live/'privkey.pem'),
+        version = subprocess.check_output(['openssl', 'version'], text=True)
+        major = re.search(r'OpenSSL\s+(\d+)', version)
+        legacy = ['-legacy'] if major and int(major.group(1)) >= 3 else []
+        subprocess.run(['openssl', 'pkcs12', '-export', *legacy, '-inkey', str(live/'privkey.pem'),
             '-in', str(live/'cert.pem'), '-certfile', str(live/'chain.pem'), '-out', str(root/'identity.p12'),
             '-passout', 'env:SHOWCASE_P12_PASSWORD'], check=True, env=environment)
         result = api('/admin/identity', {'domain': DOMAIN, 'notAfter': expires.isoformat(), 'fingerprint': fingerprint,

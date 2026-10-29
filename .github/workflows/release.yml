@@ -84,6 +84,7 @@ jobs:
           node tests/test_browser_player.cjs
           node tests/test_worker_recovery.cjs
           node --test tests/test_managed_access.mjs
+          node --test tests/test_managed_node.mjs
           node tests/test_browser_input.cjs
           node tests/test_worker_playback.cjs
           SHOWCASE_TEST_TLS=1 SHOWCASE_TEST_WIDTH=1920 SHOWCASE_TEST_HEIGHT=1080 node tests/test_worker_playback.cjs

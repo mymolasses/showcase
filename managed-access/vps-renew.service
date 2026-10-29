@@ -1,0 +1,12 @@
+[Unit]
+Description=Renew the private Showcase CarPlay certificate
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/showcase-access/issuer.env
+Environment=SHOWCASE_CERTBOT_BIN=/usr/bin/certbot
+ExecStart=/usr/bin/python3 /opt/showcase-access/managed_certificate.py
+TimeoutStartSec=600
+UMask=0077

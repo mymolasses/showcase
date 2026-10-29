@@ -1,5 +1,29 @@
 # Automatic certificate updates
 
+## Existing VPS deployment
+
+The original AssppWeb server is also suitable for hosting this service. In that
+deployment, `node-server.mjs` runs the same authenticated API behind a dedicated
+Nginx virtual host at `setup.littlepond.eu.org`. It uses a mode-0600 atomic file
+store instead of a Cloudflare Durable Object. Transactions are serialized and
+persist atomically; failed activation writes cannot leave a partial binding.
+The service container uses the already-installed Node runtime image with its
+own unprivileged user, state directory and loopback-only published port.
+
+The setup hostname points to the VPS and uses its existing Certbot installation
+with HTTP-01 webroot validation. Its deploy hook reloads Nginx after renewal.
+The `car` hostname remains DNS-only at 99.99.99.99 and needs DNS-01 validation.
+The VPS therefore needs one zone-scoped DNS edit token; no Workers deployment
+token is required. DNS credentials stay on the VPS, not the phone or GitHub.
+The daily systemd timer and `managed_certificate.py` handle the CarPlay identity.
+Existing AssppWeb containers and the original domain's certificate files are
+outside the service's deployment paths.
+
+The files `vps-nginx.conf`, `vps-renew.service`, `vps-renew.timer`, and
+`vps-nginx-renew-hook.sh` describe the separate virtual host and renewal units.
+
+## Optional Cloudflare deployment
+
 `car.littlepond.eu.org` stays DNS-only at 99.99.99.99. The iPhone's existing
 local route handles HTTPS/WSS; this change does not add a system VPN or relay
 video through the Internet.

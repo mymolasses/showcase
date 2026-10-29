@@ -1,0 +1,10 @@
+[Unit]
+Description=Check the Showcase CarPlay certificate daily
+
+[Timer]
+OnCalendar=*-*-* 03:17:00 UTC
+Persistent=true
+Unit=showcase-certificate-renew.service
+
+[Install]
+WantedBy=timers.target
