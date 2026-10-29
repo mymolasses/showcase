@@ -69,6 +69,31 @@ function frame(bytes,opcode=2){const b=Buffer.from(bytes),h=Buffer.alloc(b.lengt
   });
   assert.equal(result.ack,'ack');assert.equal(result.length,large.length);assert.equal(result.digest,crypto.createHash('sha256').update(large).digest('hex'));
   assert(upgrades.includes('/media')&&upgrades.includes('/control'));
+  // Rotate the real TLS identity without restarting the process or closing an
+  // existing WSS connection. A new handshake must present the replacement key.
+  await page.evaluate(()=>new Promise((resolve,reject)=>{const ws=window.renewalSocket=new WebSocket('wss://'+location.host+'/control');ws.onopen=resolve;ws.onerror=()=>reject(Error('renewal WSS'));}));
+  const rotatedDir=path.join(work,'rotated');fs.mkdirSync(rotatedDir);const rotated=fixture(rotatedDir,domain);
+  const managedFile=path.join(work,'browser-managed-identity.json');
+  config.testAnchor=rotated.root;
+  fs.writeFileSync(path.join(work,'browser-web.json'),JSON.stringify(config));
+  fs.writeFileSync(managedFile,JSON.stringify({domain,identityPassword:rotated.password,
+   pkcs12Base64:fs.readFileSync(path.join(rotatedDir,'browser-server.p12')).toString('base64')}),{mode:0o600});
+  helper.kill('SIGHUP');
+  const publicProbe=()=>fetch('http://127.0.0.1:'+httpPort+'/probe.json').then(r=>r.json());
+  await until(async()=>(await publicProbe()).certificateReloads===1,'identity hot reload');
+  const replacement=await new Promise((resolve,reject)=>{https.get({host:'127.0.0.1',port:httpsPort,servername:domain,ca:rotated.ca,agent:false,
+   path:'/',headers:{host:domain+':'+httpsPort}},r=>{r.resume();r.on('end',()=>resolve(r.statusCode));}).on('error',reject);});
+  assert.equal(replacement,200,'new TLS handshake trusts the rotated CA, not the previous CA');
+  assert.equal(await page.evaluate(()=>new Promise(resolve=>{window.renewalSocket.onmessage=e=>resolve(e.data);window.renewalSocket.send(JSON.stringify({type:'ping'}));})),'ack','existing WSS survives certificate replacement');
+  // Corrupt updates cannot evict the active identity. The manual backup uses a
+  // different CA and is not valid under the rotated test policy either.
+  fs.writeFileSync(managedFile,JSON.stringify({domain,identityPassword:'invalid',pkcs12Base64:'MDA='}));
+  helper.kill('SIGHUP');
+  await until(async()=>(await publicProbe()).httpsStatus.includes('保留当前连接'),'reject invalid hot reload');
+  assert.equal((await publicProbe()).certificateReloads,1);
+  assert.equal(await page.evaluate(()=>new Promise(resolve=>{window.renewalSocket.onmessage=e=>resolve(e.data);window.renewalSocket.send(JSON.stringify({type:'ping'}));})),'ack');
+  await page.evaluate(()=>window.renewalSocket.close());
+  fs.rmSync(managedFile);config.testAnchor=cert.root;
   await page.goto('http://'+domain+':'+httpPort+'/');assert.equal(await page.locator('#pair').count(),0);
   assert.equal(await page.locator('#surface').count(),1);
   helper.kill('SIGTERM');await once(helper,'exit');
@@ -81,7 +106,7 @@ function frame(bytes,opcode=2){const b=Buffer.from(bytes),h=Buffer.alloc(b.lengt
   helper.kill('SIGTERM');await once(helper,'exit');
   config.domain=domain;delete config.testAnchor;fs.writeFileSync(path.join(work,'browser-web.json'),JSON.stringify(config));fs.rmSync(state);start();
   await until(()=>fs.existsSync(state),'untrusted certificate startup');assert.equal(JSON.parse(fs.readFileSync(state)).httpsReady,false);
-  console.log('PASS: trusted test-CA HTTPS + hostname checks, HTTP/domain player root, WSS 4 MiB integrity + control, strict public Origin, loopback rewrite, certificate failure keeps HTTP');
+  console.log('PASS: trusted HTTPS + hostname checks, WSS integrity/control, live certificate rotation retains WSS, invalid renewal preserves active identity, certificate failure keeps HTTP');
  }catch(error){console.error(stderr);throw error;}finally{
   if(helper&&helper.exitCode===null){helper.kill('SIGTERM');await once(helper,'exit');}
   if(browser)await browser.close();

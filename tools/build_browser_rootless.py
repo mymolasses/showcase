@@ -177,6 +177,7 @@ def main():
                     'source/browser_bridge.h', 'source/browser_settings.h', 'source/display_geometry.h', 'source/browser_assets.h',
                     'source/browser_network.c', 'source/browser_network.h', 'source/browser_probe.m',
                     'source/browser_web_tls.m', 'source/browser_web_tls.h',
+                    'source/browser_managed_access.m', 'source/browser_managed_access.h',
                     'packaging/control-rootless/postinst', 'packaging/control-rootless/prerm',
                     'source/carplay_pair.c', 'source/carplay_pair.h', 'source/baa_broker.h']
     provenance = {'package': 'com.rostane.showcase', 'version': VERSION,
@@ -202,7 +203,7 @@ def main():
         btstack_library = work / 'libBTstack.dylib'
         btstack_library.write_bytes(payload['var/jb/usr/lib/libBTstack.dylib'][1])
         run(flags + ['-DAPP_NAME="' + DISPLAY_NAME + '"', '-DAPP_VERSION="' + VERSION + '"', '-DPACKAGE_VERSION="' + VERSION + '"',
-                     'source/Showcase.m', '-framework', 'UIKit', '-framework', 'AVFoundation',
+                     'source/Showcase.m', 'source/browser_managed_access.m', 'source/browser_web_tls.m', '-framework', 'UIKit', '-framework', 'AVFoundation',
                      '-framework', 'AudioToolbox', '-framework', 'CoreMedia', '-framework', 'Foundation',
                      '-framework', 'Security', '-Wl,-undefined,dynamic_lookup', '-o', str(ui)])
         run(flags + ['source/carplay_services.m', 'source/browser_bridge.m', 'source/carplay_pair.c',

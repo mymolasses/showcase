@@ -1,0 +1,14 @@
+{
+  "name": "showcase-access",
+  "main": "worker.mjs",
+  "compatibility_date": "2026-10-01",
+  "workers_dev": false,
+  "routes": [{"pattern":"setup.littlepond.eu.org","custom_domain":true}],
+  "vars": {
+    "DOMAIN": "car.littlepond.eu.org",
+    "SERVICE_HOST": "setup.littlepond.eu.org",
+    "CF_ZONE_ID": "2eb27d3a335f8527bb443fc6ebe6546a"
+  },
+  "durable_objects": {"bindings":[{"name":"ACCESS","class_name":"ManagedAccess"}]},
+  "migrations": [{"tag":"v1","new_sqlite_classes":["ManagedAccess"]}]
+}

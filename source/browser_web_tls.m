@@ -8,9 +8,24 @@
 #include <stdio.h>
 
 NSArray *showcase_web_identity(NSDictionary *configuration, NSString *directory, NSString *domain, NSString **message) {
+    NSString *managedFailure=nil;
+    NSData *managed=[NSData dataWithContentsOfFile:[directory stringByAppendingPathComponent:@"browser-managed-identity.json"]];
+    if(managed.length && managed.length<=400000) {
+        id value=[NSJSONSerialization JSONObjectWithData:managed options:0 error:NULL];
+        if([value isKindOfClass:NSDictionary.class] && [value[@"domain"] isEqual:domain]) {
+            NSData *bytes=[value[@"pkcs12Base64"] isKindOfClass:NSString.class] ? [[NSData alloc] initWithBase64EncodedString:value[@"pkcs12Base64"] options:0] : nil;
+            NSArray *identity=showcase_web_identity_data(bytes,value[@"identityPassword"],configuration,domain,&managedFailure);
+            if(identity)return identity;
+        }
+    }
     NSString *password = configuration[@"identityPassword"];
-    if (![password isKindOfClass:NSString.class]) { *message = @"未配置证书，HTTPS 未启用"; return nil; }
     NSData *bytes = [NSData dataWithContentsOfFile:[directory stringByAppendingPathComponent:@"browser-server.p12"]];
+    NSArray *identity=showcase_web_identity_data(bytes,password,configuration,domain,message);
+    if(!identity&&managedFailure)*message=managedFailure;
+    return identity;
+}
+NSArray *showcase_web_identity_data(NSData *bytes, NSString *password, NSDictionary *configuration, NSString *domain, NSString **message) {
+    if (![password isKindOfClass:NSString.class]) { *message = @"等待自动接入激活，HTTPS 尚未就绪"; return nil; }
     if (!bytes || bytes.length > 256 * 1024) { *message = @"证书文件不存在或超过 256 KB，HTTPS 未启用"; return nil; }
     NSMutableDictionary *options = [@{(__bridge id)kSecImportExportPassphrase: password} mutableCopy];
 #if TARGET_OS_OSX

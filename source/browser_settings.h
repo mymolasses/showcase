@@ -14,7 +14,10 @@
 #define BROWSER_PROBE_PORT 8081
 #define BROWSER_WEB_CONFIG @"/var/mobile/Library/Showcase/browser-web.json"
 #define BROWSER_WEB_IDENTITY @"/var/mobile/Library/Showcase/browser-server.p12"
-#define BROWSER_WEB_DOMAIN @"carplay.99-99-99-99.sslip.io"
+#define BROWSER_WEB_DOMAIN @"car.littlepond.eu.org"
+#define BROWSER_MANAGED_ORIGIN @"https://setup.littlepond.eu.org"
+#define BROWSER_MANAGED_IDENTITY @"/var/mobile/Library/Showcase/browser-managed-identity.json"
+#define BROWSER_MANAGED_CLIENT @"/var/mobile/Library/Showcase/browser-managed-client.json"
 #define BROWSER_DISPLAY_CONFIG @"/var/mobile/Library/Showcase/browser-display.json"
 #define PHONE_ISLAND_KEY @"phoneIslandAvoidance"
 #define PHONE_FILL_KEY @"phoneFillDisplay"

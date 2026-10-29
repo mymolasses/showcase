@@ -1,4 +1,13 @@
-# Showcase+ 1.5.0 / 1015
+# Showcase+ 1.6.0 / 1016
+
+- Add device-bound activation and automatic trusted-certificate refresh for car.littlepond.eu.org.
+- Check for updates on launch/foreground and every six hours while the app runs; keep a validated local certificate through service/network failures.
+- Apply certificate updates to new HTTPS connections without restarting the app or closing existing WSS sessions.
+- Keep DNS credentials on the dedicated service. Personal packages contain a short-lived activation code; public build artifacts contain no certificate private key or access token.
+- Automatic issuance runs separately from app releases and does not require reinstalling after each renewal. Initial activation requires the personal 1.6.0 package.
+- Target iPhone and Tesla validation remain required.
+
+## 1.5.0 / 1015
 
 - Replace the five browser display modes with one Worker/WebCodecs/OffscreenCanvas/WebGL2 path.
 - Forward compressed H.264 over same-origin WSS without phone-side image transcoding.

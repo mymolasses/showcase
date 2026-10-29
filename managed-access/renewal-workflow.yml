@@ -1,0 +1,39 @@
+# Deploy this workflow and tools/managed_certificate.py to the dedicated private
+# mymolasses/showcase-certificate-renewal repository. Never upload P12 artifacts.
+name: Renew CarPlay Certificate
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Exercise actual renewal even when the current certificate is not due
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: carplay-certificate
+  cancel-in-progress: false
+jobs:
+  renew:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check expiry and renew when fewer than 35 days remain
+        env:
+          SHOWCASE_ISSUER_TOKEN: ${{ secrets.SHOWCASE_ISSUER_TOKEN }}
+          FORCE_RENEW: ${{ inputs.force || false }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install 'certbot==5.8.0'
+          if [ "$FORCE_RENEW" = true ]; then
+            python tools/managed_certificate.py --force
+          else
+            python tools/managed_certificate.py
+          fi

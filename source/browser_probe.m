@@ -26,6 +26,7 @@
 #define RELAY_LIMIT (1024 * 1024)
 static NSString *webDomain, *httpsMessage;
 static bool httpsReady;
+static uint64_t identityReloads;
 static uint16_t httpsPort = 443, backendPort = BROWSER_PORT;
 static double networkCheckedAt, networkCheckDuration;
 #ifndef SHOWCASE_RELEASE_VERSION
@@ -36,7 +37,9 @@ static double networkCheckedAt, networkCheckDuration;
 #endif
 
 static volatile sig_atomic_t stopped;
+static volatile sig_atomic_t reloadIdentity;
 static void stop_signal(int value) { (void)value; stopped = 1; }
+static void reload_signal(int value) { (void)value; reloadIdentity = 1; }
 static double now(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec / 1e9; }
 static NSString *ip(uint32_t address) {
     if (!address) return @"";
@@ -73,7 +76,7 @@ static NSDictionary *report(SCNetState *s, bool port80, uint16_t port, uint64_t 
         @"interface": [NSString stringWithUTF8String:s->primary.name], @"hotspotAddress": ip(s->primary.address),
         @"compatibilityAddress": @SC_COMPAT_IP, @"port80": @(port80), @"probePort": @(port),
         @"domain": webDomain ?: @"", @"httpsReady": @(httpsReady), @"httpsPort": @(httpsPort),
-        @"httpsStatus": httpsMessage ?: @"", @"probeRequests": @(requests), @"tlsOnHTTP": @(tls),
+        @"httpsStatus": httpsMessage ?: @"", @"certificateReloads": @(identityReloads), @"probeRequests": @(requests), @"tlsOnHTTP": @(tls),
         @"consecutiveFailures": @(s->failures), @"retryInMs": @(MAX(0, s->retryAt - now()) * 1000),
         @"aliasInterface": [NSString stringWithUTF8String:s->alias.name],
         @"routeCheckAgeMs": @(networkCheckedAt ? (now()-networkCheckedAt)*1000 : -1),
@@ -218,7 +221,7 @@ int main(int argc, char **argv) { @autoreleasepool {
     NSString *lockPath=[statePath stringByAppendingString:@".lock"];
     int lock=open(lockPath.fileSystemRepresentation,O_RDWR|O_CREAT|O_NOFOLLOW,0600);
     if (lock<0 || flock(lock,LOCK_EX|LOCK_NB)) { fprintf(stderr,"Network entry already running or lock unavailable\n"); if(lock>=0) close(lock); return 4; }
-    signal(SIGPIPE,SIG_IGN); signal(SIGTERM,stop_signal); signal(SIGINT,stop_signal);
+    signal(SIGPIPE,SIG_IGN); signal(SIGTERM,stop_signal); signal(SIGINT,stop_signal);signal(SIGHUP,reload_signal);
     int ports[3]={listener(port),-1,-1};
     if (ports[0]<0) { fprintf(stderr,"Fallback port %u unavailable: %s\n",port,strerror(errno)); close(lock); return 5; }
 #ifdef SC_PROBE_TEST
@@ -258,6 +261,21 @@ int main(int argc, char **argv) { @autoreleasepool {
     NSMutableArray<SCProbeClient*> *clients=[NSMutableArray array];
     uint64_t requests=0,tls=0; double nextTick=0;
     while(!stopped && getppid()==parent) { @autoreleasepool {
+        if(reloadIdentity) {
+            reloadIdentity=0;
+            NSData *bytes=[NSData dataWithContentsOfFile:[directory stringByAppendingPathComponent:@"browser-web.json"]];
+            id value=bytes.length&&bytes.length<=8192?[NSJSONSerialization JSONObjectWithData:bytes options:0 error:NULL]:nil;
+            NSDictionary *updated=[value isKindOfClass:NSDictionary.class]?value:@{};
+            NSString *domain=showcase_web_domain_valid(updated[@"domain"])?updated[@"domain"]:BROWSER_WEB_DOMAIN,*status=nil;
+            NSArray *replacement=showcase_web_identity(updated,directory,domain,&status);
+            if(replacement) {
+                identityReloads++;
+                certificates=replacement;webDomain=domain;configuration=updated;
+                if(ports[2]<0)ports[2]=listener(httpsPort);
+                httpsReady=ports[2]>=0;httpsMessage=httpsReady?status:@"证书有效，但 HTTPS 端口被占用";
+            } else httpsMessage=httpsReady?[@"新证书未应用，保留当前连接：" stringByAppendingString:status?:@"校验失败"]:status;
+            nextTick=0;
+        }
         if(now()>=nextTick) {
             char previous[sizeof(state.detail)]; snprintf(previous,sizeof(previous),"%s",state.detail);
             if(!monitor_snapshot(&monitor,&state)) { fprintf(stderr,"[TESLA-NET] guard channel failed\n"); break; }

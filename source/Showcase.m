@@ -46,6 +46,7 @@
 #include <notify.h>
 #include "baa_broker.h"
 #include "browser_settings.h"
+#include "browser_managed_access.h"
 
 extern char **environ;
 
@@ -3310,6 +3311,9 @@ typedef NS_ENUM(NSInteger, ConnectStep) {
 @property (nonatomic, assign) pid_t baaBrokerPid;
 @property (nonatomic, assign) pid_t browserProbePid;
 @property (nonatomic, assign) BOOL browserProbeChanging;
+@property (nonatomic, strong) NSTimer *managedAccessTimer;
+- (void)refreshManagedAccess;
+- (void)retryManagedAccess;
 - (void)setBrowserProbeEnabled:(BOOL)enabled;
 - (NSString *)browserProbeDescription;
 
@@ -3457,6 +3461,11 @@ typedef NS_ENUM(NSInteger, ConnectStep) {
     ip_log("launch: UI ready");
 
 #ifdef SHOWCASE_ROOTLESS
+    [self refreshManagedAccess];
+    __weak AppDelegate *weakAccessSelf=self;
+    self.managedAccessTimer=[NSTimer scheduledTimerWithTimeInterval:1800 repeats:YES block:^(NSTimer *timer){
+        (void)timer;[weakAccessSelf refreshManagedAccess];
+    }];
     if ([[NSUserDefaults standardUserDefaults] boolForKey:BROWSER_PROBE_KEY]) [self setBrowserProbeEnabled:YES];
 #endif
 
@@ -3644,6 +3653,7 @@ static pid_t reusable_baa_broker(void) {
     [self endBackgroundTask];
     ip_log("foregrounded — continuing state=%ld", (long)self.state);
 #ifdef SHOWCASE_ROOTLESS
+    [self refreshManagedAccess];
     if ([[NSUserDefaults standardUserDefaults] boolForKey:BROWSER_PROBE_KEY]) [self setBrowserProbeEnabled:YES];
 #endif
     if (self.state == StateActive || self.state == StateAwaitingPhone) {
@@ -3671,6 +3681,31 @@ static pid_t reusable_baa_broker(void) {
     /* The BAA broker stays up so the next launch can reuse its certificate. */
 }
 
+- (void)refreshManagedAccessWithForce:(BOOL)force {
+#ifdef SHOWCASE_ROOTLESS
+    __weak AppDelegate *weakSelf=self;
+    NSString *profile=[NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:@"ShowcaseAccess.json"];
+    showcase_managed_access_refresh(profile,force,^(BOOL ready,BOOL changed,BOOL activated){
+        (void)activated;(void)changed;AppDelegate *owner=weakSelf;if(!owner)return;
+        NSUserDefaults *defaults=NSUserDefaults.standardUserDefaults;
+        if(ready&&![defaults boolForKey:@"managedAccessActivated"]){
+            [defaults setBool:YES forKey:@"managedAccessActivated"];
+            [defaults setBool:YES forKey:BROWSER_OUTPUT_KEY];[defaults setBool:YES forKey:BROWSER_PROBE_KEY];[defaults synchronize];
+        }
+        if(ready&&[defaults boolForKey:BROWSER_PROBE_KEY]){
+            // Retry application as well as download: an earlier reload or config
+            // write may have failed after the new identity was saved locally.
+            if(pid_alive(owner.browserProbePid))kill(owner.browserProbePid,SIGHUP);
+            else [owner setBrowserProbeEnabled:YES];
+        }
+        [owner renderState];
+    });
+#else
+    (void)force;
+#endif
+}
+- (void)refreshManagedAccess { [self refreshManagedAccessWithForce:NO]; }
+- (void)retryManagedAccess { [self refreshManagedAccessWithForce:YES]; }
 - (void)setBrowserProbeEnabled:(BOOL)enabled {
     if (self.browserProbeChanging) return;
     if (self.browserProbePid > 0 && !pid_alive(self.browserProbePid)) self.browserProbePid = 0;
@@ -7416,28 +7451,32 @@ static BOOL g_settings_hardware_loading = NO;
 
 #ifdef SHOWCASE_ROOTLESS
     [b card:^(SettingsCard *card) {
-        UIView *probe = [self switchRow:@"Tesla Network Probe / 车机网络探测"
-            subtitle:@"Experimental local address. Personal Hotspot required; CarPlay optional."
+        UIView *probe = [self switchRow:@"Automatic Hotspot Access / 自动热点接入"
+            subtitle:@"开启个人热点后访问 car.littlepond.eu.org；HTTPS 自动准备。"
             on:[d boolForKey:BROWSER_PROBE_KEY] width:w changed:^(BOOL on) {
                 [weakSelf.appDelegate setBrowserProbeEnabled:on];
                 dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), dispatch_get_main_queue(), ^{ [weakSelf render]; });
             }];
         [card addRow:probe height:probe.bounds.size.height];
+        [card addRow:[self actionRow:@"Retry Automatic Setup / 重试自动接入"
+            color:nil width:w enabled:YES action:^{[weakSelf.appDelegate retryManagedAccess];}] height:52];
         [card addRow:[self actionRow:@"Refresh Network Status / 刷新探测状态"
             color:nil width:w enabled:YES action:^{ [weakSelf render]; }] height:52];
         [card addRow:[self actionRow:@"Copy Network Status / 复制探测状态"
             color:nil width:w enabled:YES action:^{ [UIPasteboard generalPasteboard].string = [weakSelf.appDelegate browserProbeDescription]; }] height:52];
-        [card addRow:[self actionRow:@"Web Domain / 设置网页域名"
+        if(![d boolForKey:@"managedAccessActivated"]) {
+        [card addRow:[self actionRow:@"Advanced Web Domain / 高级：手动域名"
             color:nil width:w enabled:YES action:^{ [weakSelf editBrowserDomain]; }] height:52];
-        [card addRow:[self actionRow:@"Import HTTPS Certificate / 导入 HTTPS 证书"
+        [card addRow:[self actionRow:@"Advanced HTTPS Certificate / 高级：手动证书"
             color:nil width:w enabled:YES action:^{
                 UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc] initWithDocumentTypes:@[@"public.data"] inMode:UIDocumentPickerModeImport];
                 picker.delegate = weakSelf; [weakSelf presentViewController:picker animated:YES completion:nil];
             }] height:52];
+        }
     }];
     [b labelText:[self.appDelegate browserProbeDescription] font:[UIFont monospacedDigitSystemFontOfSize:14 weight:UIFontWeightRegular]
         alpha:0.85 inset:16 gapAfter:16 color:nil];
-    [b message:@"浏览器 CarPlay 需要可信 HTTPS/WSS。请配置自有域名及匹配的可信 P12 证书；HTTP 仅用于网络诊断。修改后关闭再开启车机网络探测。" color:[UIColor colorWithWhite:1 alpha:0.65]];
+    [b message:showcase_managed_access_status() color:[UIColor colorWithWhite:1 alpha:0.65]];
 #endif
 
     [b card:^(SettingsCard *card) {

@@ -1,4 +1,4 @@
-# Showcase+ 1.5.0 / 1015：单一浏览器输出
+# Showcase+ 1.6.0 / 1016：单一浏览器输出
 
 仅保留：H.264 → 同源 WSS → Worker → WebCodecs → OffscreenCanvas / WebGL2。
 网页不再提供 JPEG、MJPEG、软件解码、WebRTC 或旧模式选择器，也不会回退到它们。
@@ -7,7 +7,7 @@
 ## 必要条件
 
 - 车机需要浏览器信任的 HTTPS 证书与同源 WSS。
-- 接收机设置中配置自有域名、匹配的可信 P12 证书，再重启网络探测。现有证书导入和热点路由保留；HTTP 入口仅适合网络诊断。
+- 个人激活包自动配置 car.littlepond.eu.org 并检查可信证书更新；普通构建保留手动域名与 P12 导入。热点路由保留；HTTP 入口仅适合网络诊断。
 - 浏览器需要 Worker 中的 VideoDecoder、OffscreenCanvas、WebGL2 和支持源 AVC Profile 的解码器。
 - 不满足条件时明确显示失败原因；不尝试低帧率后备。localhost 的 HTTP 例外只用于本机开发，不能代表车机的局域网 HTTP 可用。
 

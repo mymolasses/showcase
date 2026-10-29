@@ -19,5 +19,8 @@ source/*.dSYM/
 
 build/
 
+# Personal managed-access activations, service tokens and TLS material.
+.private/
+
 # Local Wrangler state
 telemetry/.wrangler/

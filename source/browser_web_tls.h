@@ -5,6 +5,8 @@
  * No key, P12 password or certificate is bundled with this application. */
 NSArray *showcase_web_identity(NSDictionary *configuration, NSString *directory,
                              NSString *domain, NSString **message);
+NSArray *showcase_web_identity_data(NSData *bytes, NSString *password, NSDictionary *configuration,
+                                  NSString *domain, NSString **message);
 @interface SCWebTLS : NSObject
 @property (nonatomic, readonly) BOOL wantsWrite;
 - (instancetype)initWithFD:(int)fd certificates:(NSArray *)certificates;
