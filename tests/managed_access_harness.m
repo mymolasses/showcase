@@ -29,12 +29,9 @@ static NSMutableArray<NSURLRequest *> *requests;
 -(void)stopLoading {}
 @end
 
-static NSDictionary *read(NSString *path){
+static NSDictionary *loadFixtureObject(NSString *path){
     NSData *data=[NSData dataWithContentsOfFile:path];
     return data?[NSJSONSerialization JSONObjectWithData:data options:0 error:NULL]:nil;
-}
-static void write(NSDictionary *value,NSString *path){
-    CHECK([[NSJSONSerialization dataWithJSONObject:value options:0 error:NULL] writeToFile:path atomically:YES]);
 }
 static NSArray *refresh(NSString *profile){
     __block NSArray *result=nil;
@@ -46,18 +43,18 @@ static NSArray *refresh(NSString *profile){
 int main(int argc,const char **argv){@autoreleasepool{
     CHECK(argc==2);NSString *root=[NSString stringWithUTF8String:argv[1]];requests=[NSMutableArray array];
     NSString *profile=[root stringByAppendingPathComponent:@"activation.json"],*identity=[root stringByAppendingPathComponent:@"browser-managed-identity.json"],*client=[root stringByAppendingPathComponent:@"browser-managed-client.json"];
-    NSDictionary *first=read([root stringByAppendingPathComponent:@"first.json"]),*second=read([root stringByAppendingPathComponent:@"second.json"]);
+    NSDictionary *first=loadFixtureObject([root stringByAppendingPathComponent:@"first.json"]),*second=loadFixtureObject([root stringByAppendingPathComponent:@"second.json"]);
     CHECK(first&&second);
     // An invalid initial identity must never create a usable HTTPS cache/token.
     NSMutableDictionary *bad=[first mutableCopy];bad[@"identityPassword"]=@"wrong-password";
     responseBytes=[NSJSONSerialization dataWithJSONObject:bad options:0 error:NULL];
-    CHECK(![refresh(profile)[0] boolValue]);CHECK(read(identity)==nil);CHECK(read(client)[@"clientToken"]==nil);
+    CHECK(![refresh(profile)[0] boolValue]);CHECK(loadFixtureObject(identity)==nil);CHECK(loadFixtureObject(client)[@"clientToken"]==nil);
     responseBytes=[NSJSONSerialization dataWithJSONObject:first options:0 error:NULL];
     NSArray *initial=refresh(profile);CHECK([initial[0] boolValue]&&[initial[1] boolValue]&&[initial[2] boolValue]);
-    NSDictionary *state=read(client);CHECK([state[@"clientToken"] isEqual:first[@"clientToken"]]);CHECK([state[@"deviceNonce"] length]==64);
-    CHECK([read(identity)[@"pkcs12Base64"] isEqual:first[@"pkcs12Base64"]]);
+    NSDictionary *state=loadFixtureObject(client);CHECK([state[@"clientToken"] isEqual:first[@"clientToken"]]);CHECK([state[@"deviceNonce"] length]==64);
+    CHECK([loadFixtureObject(identity)[@"pkcs12Base64"] isEqual:first[@"pkcs12Base64"]]);
     for(NSString *name in @[@"browser-managed-identity.json",@"browser-managed-client.json",@"browser-web.json"]){struct stat st;CHECK(!stat([[root stringByAppendingPathComponent:name] fileSystemRepresentation],&st));CHECK((st.st_mode&0777)==0600);}
-    CHECK([read([root stringByAppendingPathComponent:@"browser-web.json"])[@"domain"] isEqual:@"car.littlepond.eu.org"]);
+    CHECK([loadFixtureObject([root stringByAppendingPathComponent:@"browser-web.json"])[@"domain"] isEqual:@"car.littlepond.eu.org"]);
     responseBytes=[NSJSONSerialization dataWithJSONObject:second options:0 error:NULL];
     NSArray *updated=refresh(profile);CHECK([updated[0] boolValue]&&[updated[1] boolValue]&&![updated[2] boolValue]);
     CHECK([requests.lastObject.URL.path isEqual:@"/v1/identity"]);
