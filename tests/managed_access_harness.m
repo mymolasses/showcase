@@ -5,7 +5,6 @@
 
 static NSData *responseBytes;
 static NSInteger responseStatus=200;
-static BOOL redirectResponse;
 static NSMutableArray<NSURLRequest *> *requests;
 #define CHECK(value) do { if(!(value)){fprintf(stderr,"Managed access check failed at line %d\n",__LINE__);exit(1);} } while(0)
 
@@ -17,11 +16,7 @@ static NSMutableArray<NSURLRequest *> *requests;
     CHECK([self.request.URL.host isEqual:@"setup.littlepond.eu.org"]);
     [requests addObject:self.request];
     NSDictionary *headers=@{@"Content-Type":@"application/json",@"Content-Length":@(responseBytes.length).stringValue};
-    NSHTTPURLResponse *response=[[NSHTTPURLResponse alloc] initWithURL:self.request.URL statusCode:redirectResponse?302:responseStatus HTTPVersion:@"HTTP/1.1" headerFields:headers];
-    if(redirectResponse){
-        [self.client URLProtocol:self wasRedirectedToRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:@"https://attacker.invalid/identity"]] redirectResponse:response];
-        return;
-    }
+    NSHTTPURLResponse *response=[[NSHTTPURLResponse alloc] initWithURL:self.request.URL statusCode:responseStatus HTTPVersion:@"HTTP/1.1" headerFields:headers];
     [self.client URLProtocol:self didReceiveResponse:response cacheStoragePolicy:NSURLCacheStorageNotAllowed];
     [self.client URLProtocol:self didLoadData:responseBytes];
     [self.client URLProtocolDidFinishLoading:self];
@@ -34,6 +29,7 @@ static NSDictionary *loadFixtureObject(NSString *path){
     return data?[NSJSONSerialization JSONObjectWithData:data options:0 error:NULL]:nil;
 }
 static NSArray *refresh(NSString *profile){
+    static unsigned sequence;fprintf(stderr,"[managed-test] refresh %u, HTTP %ld, bytes %lu\n",++sequence,(long)responseStatus,(unsigned long)responseBytes.length);
     __block NSArray *result=nil;
     showcase_managed_access_refresh(profile,YES,^(BOOL ready,BOOL changed,BOOL activated){result=@[@(ready),@(changed),@(activated)];});
     NSDate *deadline=[NSDate dateWithTimeIntervalSinceNow:12];
@@ -67,8 +63,14 @@ int main(int argc,const char **argv){@autoreleasepool{
     responseBytes=[NSJSONSerialization dataWithJSONObject:second options:0 error:NULL];responseStatus=401;
     CHECK([refresh(profile)[0] boolValue]);CHECK([[NSData dataWithContentsOfFile:identity] isEqual:retained]);responseStatus=200;
     responseBytes=[NSMutableData dataWithLength:400001];CHECK(![refresh(profile)[1] boolValue]);CHECK([[NSData dataWithContentsOfFile:identity] isEqual:retained]);
-    responseBytes=[NSJSONSerialization dataWithJSONObject:second options:0 error:NULL];redirectResponse=YES;
-    CHECK(![refresh(profile)[1] boolValue]);CHECK([[NSData dataWithContentsOfFile:identity] isEqual:retained]);redirectResponse=NO;
+    // URLProtocol redirect emulation does not reliably complete cancelled tasks
+    // on macOS. Exercise the production NSURLSession redirect delegate itself.
+    id<NSURLSessionTaskDelegate> redirectDelegate=[NSClassFromString(@"SCManagedRequest") new];
+    __block BOOL refused=NO;
+    [redirectDelegate URLSession:nil task:nil willPerformHTTPRedirection:nil
+      newRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:@"https://attacker.invalid/identity"]]
+      completionHandler:^(NSURLRequest *request){refused=request==nil;}];
+    CHECK(refused);CHECK([[NSData dataWithContentsOfFile:identity] isEqual:retained]);
     CHECK(![showcase_managed_access_status() containsString:first[@"clientToken"]]);
     CHECK(![showcase_managed_access_status() containsString:first[@"identityPassword"]]);
     puts("PASS: native activation, trusted P12 rotation, 0600 cache, authenticated refresh, invalid identity/401/oversize/redirect preserve working certificate");

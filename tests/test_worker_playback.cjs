@@ -99,7 +99,11 @@ function wire(data){
       const end=Date.now()+15000;while(mediaConnections===reconnected){if(Date.now()>end)throw Error('media connection did not recover');await sleep(50);}
       await ready();
       assert.equal(workers,priorWorkers+1,'recovery reuses the same Worker and GPU context');
-      await page.click('#disconnect');await sleep(150);
+      // The standalone SwiftShader runner can starve Playwright's rAF-based
+      // layout-stability wait at 1080p. This assertion covers the disconnect
+      // handler and retained GPU pixels; separate input/display tests exercise
+      // real pointer hits and menu controls.
+      await page.locator('#disconnect').dispatchEvent('click');await sleep(150);
       assert.equal(await page.evaluate(()=>showcaseDiagnostics().retainedFrame),true,'disconnect retains final image');
       const retained=await redPixel();
       assert(retained[0]>retained[2]+100 && retained[3]===255,'the original GPU canvas retains real pixels after disconnect');

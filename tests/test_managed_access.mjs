@@ -73,3 +73,17 @@ test('expired codes and certificates fail closed',async()=>{
   const entry=[...f.records.entries()].find(([key])=>key.startsWith('enrollment:'));entry[1].expiresAt=0;
   assert.equal((await f.call('/v1/activate',null,{activationCode,deviceNonce:'1'.repeat(64)})).status,403);
 });
+
+test('an enrolled phone receives the next identity without another activation',async()=>{
+  const f=fixture();await f.call('/admin/identity',f.env.ISSUER_TOKEN,f.identity);
+  const {data:{activationCode}}=await f.call('/admin/enrollments',f.env.ADMIN_TOKEN,{});
+  const activated=await f.call('/v1/activate',null,{activationCode,deviceNonce:'1'.repeat(64)});
+  const token=activated.data.clientToken;
+  const replacement={...f.identity,fingerprint:'e'.repeat(64),identityPassword:'replacement-private-password',
+    pkcs12Base64:Buffer.concat([Buffer.from([0x30]),Buffer.alloc(300,2)]).toString('base64')};
+  assert.equal((await f.call('/admin/identity',f.env.ISSUER_TOKEN,replacement)).status,200);
+  const refreshed=await f.call('/v1/identity',token);
+  assert.equal(refreshed.status,200);assert.equal(refreshed.data.fingerprint,replacement.fingerprint);
+  assert.equal(refreshed.data.pkcs12Base64,replacement.pkcs12Base64);assert(!('clientToken' in refreshed.data));
+  assert.equal((await f.call('/v1/identity',f.env.ISSUER_TOKEN)).status,401);
+});

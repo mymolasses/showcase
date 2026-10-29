@@ -133,6 +133,7 @@ jobs:
           set -euo pipefail
           python3 tools/embed_browser.py
           git diff --exit-code -- source/browser_assets.h
+          node tests/test_managed_access_native.cjs
           SHOWCASE_TEST_SOURCE_FPS=10 SHOWCASE_TEST_TLS=1 node tests/test_browser_e2e.cjs
           python3 tests/test_display_profile.py
           python3 tests/test_display_restart.py
@@ -150,7 +151,6 @@ jobs:
           "$RUNNER_TEMP/test-browser-network"
           node tests/test_browser_probe.cjs
           node tests/test_browser_web_tls.cjs
-          node tests/test_managed_access_native.cjs
       - name: Build and verify Dopamine rootless deb
         shell: bash
         run: |
