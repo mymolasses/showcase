@@ -101,7 +101,8 @@ assert(Number.isInteger(fps) && fps >= 1 && fps <= 60);
     page.on('pageerror', error => pageErrors.push(error.message));
     await page.goto(useTLS ? `https://${domain}:${tlsPort}/` : `http://127.0.0.1:${frontPort}/`);
     progress('first decoded frame');
-    assert.equal(await page.locator('input').count(), 0);
+    assert.equal(await page.locator('input[type="password"]').count(), 0);
+    assert.equal(await page.locator('#custom-output').isVisible(), false);
     await waitFor(()=>window.showcaseDiagnostics?.().displayed && showcaseDiagnostics().drawnFrames>2,null,{timeout:20000});
     await until(() => stderr.includes('[BROWSER] control connected'), 'browser control channel');
     // Status polling must enable input after actual frames arrive.
