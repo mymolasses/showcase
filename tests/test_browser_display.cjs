@@ -92,6 +92,8 @@ const wire=data=>{
     const tallRect=await page.locator('#surface').boundingBox();await page.mouse.click(tallRect.x+tallRect.width/2,tallRect.y+tallRect.height/2);
     await page.waitForTimeout(150);assert(touches.some(t=>t.phase===0&&t.x===800&&t.y===600&&t.generation===generation));
     await page.click('#menu');
+    const fineCount=requests.length;await page.fill('#output-height','1202');await page.click('#custom-apply');await ready('custom',1600,1202);
+    assert.equal(requests.length,fineCount+1,'an explicit two-pixel custom adjustment must not be suppressed as viewport jitter');
     await page.screenshot({path:path.join(root,'build','browser-display-options.png')});
     // A selection changed in the phone app becomes authoritative on the page.
     profile={mode:'phone',width:1600,height:1000};const before=requests.length;

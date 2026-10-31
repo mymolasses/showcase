@@ -39,7 +39,7 @@
   function outputMatches() {
     const target=outputTarget(), saved=server?.displayRequest;
     const tolerance=automaticOutput() ? .01 : 0;
-    return target && saved?.mode===outputMode && (outputMode!=='auto-landscape' || Math.abs((saved.landscapeRatio || 1.45)-landscapeRatio)<.0001) && Math.abs(saved.width-target.width)<=Math.max(2,target.width*tolerance) && Math.abs(saved.height-target.height)<=Math.max(2,target.height*tolerance);
+    return target && saved?.mode===outputMode && (outputMode!=='auto-landscape' || Math.abs((saved.landscapeRatio || 1.45)-landscapeRatio)<.0001) && Math.abs(saved.width-target.width)<=(tolerance?Math.max(2,target.width*tolerance):0) && Math.abs(saved.height-target.height)<=(tolerance?Math.max(2,target.height*tolerance):0);
   }
   function queueOutput() {
     if(editingOutput || outputTimer!==null || !server?.displayControl || outputMatches())return;
