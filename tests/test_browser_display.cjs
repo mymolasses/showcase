@@ -1,7 +1,7 @@
 /* Real Chrome: production output selector, viewport measurement, reconnection and touch. */
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),http=require('node:http'),crypto=require('node:crypto');
 const {once}=require('node:events'),{chromium}=require('playwright');
-const {displaySize}=require('../web/protocol.js');
+const {displaySize,customDisplaySize,autoDisplaySize}=require('../web/protocol.js');
 const root=path.resolve(__dirname,'..');
 const wire=data=>{
   const h=Buffer.alloc(data.length<126?2:data.length<65536?4:10);h[0]=0x82;
@@ -26,9 +26,9 @@ const wire=data=>{
   let applying=false;
   async function apply(message) {
     requests.push(message);
-    const size=message.mode==='auto'?displaySize(message.width,message.height):message.mode==='phone'?phoneDisplay:displaySize(...message.mode.split('x').map(Number));
+    const size=message.mode.startsWith('auto')?autoDisplaySize(message.width,message.height,message.mode==='auto-landscape'?message.landscapeRatio:0):message.mode==='custom'?customDisplaySize(message.width,message.height):message.mode==='phone'?phoneDisplay:displaySize(...message.mode.split('x').map(Number));
     assert(size);applying=true;await image(size.width,size.height);
-    profile={...size,mode:message.mode};width=size.width;height=size.height;generation++;active=false;
+    profile={...size,mode:message.mode,landscapeRatio:message.landscapeRatio || 0};width=size.width;height=size.height;generation++;active=false;
     for(const socket of [...media,...controls])socket.destroy();
     setTimeout(()=>{active=true;applying=false;for(const socket of media)socket.write(wire(config()));},250);
   }
@@ -75,6 +75,23 @@ const wire=data=>{
     await page.selectOption('#output-resolution','1600x1000');await ready('1600x1000',1600,1000);
     const rect=await page.locator('#surface').boundingBox();await page.mouse.click(rect.x+rect.width/2,rect.y+rect.height/2);
     await page.waitForTimeout(150);assert(touches.some(t=>t.phase===0&&t.x===800&&t.y===500&&t.generation===generation));
+    // Editing must not repeatedly restart CarPlay; Apply sends the chosen size.
+    const customCount=requests.length;
+    await page.selectOption('#output-resolution','custom');
+    await page.fill('#output-width','1600');await page.fill('#output-height','1200');
+    await page.waitForTimeout(3500);assert.equal(requests.length,customCount);
+    await page.click('#custom-apply');await ready('custom',1600,1200);
+    await page.fill('#output-height','1201');await page.click('#custom-apply');
+    await page.waitForTimeout(2500);assert.equal(requests.length,customCount+1);
+    assert.match(await page.locator('#display-error').textContent(),/偶数/);
+    await page.fill('#output-width','4096');await page.fill('#output-height','4096');await page.click('#custom-apply');
+    assert.match(await page.locator('#display-error').textContent(),/8294400/);
+    await page.fill('#output-width','1600');await page.fill('#output-height','1200');await page.click('#custom-apply');
+    await page.reload();await ready('custom',1600,1200);
+    await page.waitForTimeout(2500);assert.equal(requests.length,customCount+1,'saved custom dimensions must survive reload without restarting');
+    const tallRect=await page.locator('#surface').boundingBox();await page.mouse.click(tallRect.x+tallRect.width/2,tallRect.y+tallRect.height/2);
+    await page.waitForTimeout(150);assert(touches.some(t=>t.phase===0&&t.x===800&&t.y===600&&t.generation===generation));
+    await page.click('#menu');
     await page.screenshot({path:path.join(root,'build','browser-display-options.png')});
     // A selection changed in the phone app becomes authoritative on the page.
     profile={mode:'phone',width:1600,height:1000};const before=requests.length;
@@ -83,6 +100,14 @@ const wire=data=>{
     width=1920;height=900;generation++;await image(width,height);for(const s of media)s.write(wire(config()));profile={mode:'phone',width,height};
     await ready('phone',1920,900);await page.waitForTimeout(2500);assert.equal(requests.length,before,'browser must not overwrite a phone-app choice');
     await page.selectOption('#output-resolution','auto');await ready('auto',1200,800);
-    assert.deepEqual(errors,[]);console.log('PASS: real Chrome auto viewport, jitter suppression, reconnect, phone/manual/auto targets, remote preference and resized touch');
+    await page.setViewportSize({width:1600,height:1250});await ready('auto',1600,1250);
+    await page.selectOption('#output-resolution','auto-landscape');await ready('auto-landscape',1600,1102);
+    assert.equal(await page.locator('#landscape-output').isVisible(),true);
+    await page.fill('#landscape-ratio','1.40');await page.click('#landscape-apply');await ready('auto-landscape',1600,1142);
+    await page.reload();await ready('auto-landscape',1600,1142);
+    assert.equal((await page.evaluate(()=>showcaseDiagnostics())).landscapeRatio,1.4);
+    await page.setViewportSize({width:1600,height:900});await ready('auto-landscape',1600,900);
+    await page.click('#menu');await page.screenshot({path:path.join(root,'build','browser-landscape-options.png')});
+    assert.deepEqual(errors,[]);console.log('PASS: real Chrome auto/custom/landscape, >1080 height, explicit Apply, validation, persistence, resize, remote preference and resized touch');
   } finally {clearInterval(timer);if(browser)await browser.close();for(const s of sockets)s.destroy();await new Promise(resolve=>server.close(resolve));}
 })().catch(error=>{console.error(error);process.exitCode=1;});

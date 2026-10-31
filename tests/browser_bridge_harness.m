@@ -15,7 +15,8 @@ static bool touch(uint8_t phase, uint16_t x, uint16_t y, uint8_t contact, uint64
     printf("TOUCH %u %u %u\n", phase, x, y); fflush(stdout); return true;
 }
 static void resync(void) { printf("KEY\n"); fflush(stdout); }
-static bool display(const char *mode,uint16_t width,uint16_t height,uint16_t vw,uint16_t vh) {
+static bool display(const char *mode,uint16_t width,uint16_t height,uint16_t vw,uint16_t vh,double ratio) {
+    (void)ratio;
     showcase_browser_phone_size(1920,886); /* Callback must run outside the bridge mutex. */
     printf("DISPLAY %s %u %u %u %u\n",mode,width,height,vw,vh); fflush(stdout); return true;
 }

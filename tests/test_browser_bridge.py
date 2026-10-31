@@ -235,8 +235,23 @@ def main():
             time.sleep(8)
             display_control.send(dict(type='display',mode='phone'))
             assert wait_event('DISPLAY')=='DISPLAY phone 1920 886 0 0'
+            time.sleep(8)
+            display_control.send(dict(type='display',mode='custom',width=1600,height=1200))
+            assert wait_event('DISPLAY')=='DISPLAY custom 1600 1200 0 0'
+            deadline=time.monotonic()+2
+            while status()['displayRequest'].get('mode')!='custom' and time.monotonic()<deadline: time.sleep(.03)
+            assert status()['displayRequest']['height']==1200
+            time.sleep(8)
+            display_control.send(dict(type='display',mode='auto-landscape',width=1600,height=1250,landscapeRatio=1.4))
+            assert wait_event('DISPLAY')=='DISPLAY auto-landscape 1600 1142 1600 1250'
+            deadline=time.monotonic()+2
+            while status()['displayRequest'].get('mode')!='auto-landscape' and time.monotonic()<deadline: time.sleep(.03)
+            assert status()['displayRequest']['landscapeRatio']==1.4
             display_control.close(); sockets.remove(display_control)
-            for bad in [dict(type='display',mode='auto',width=True,height=720),dict(type='display',mode='9999x100'),dict(type='display',mode='auto',width=0,height=720)]:
+            for bad in [dict(type='display',mode='auto',width=True,height=720),dict(type='display',mode='9999x100'),dict(type='display',mode='auto',width=0,height=720),
+                        dict(type='display',mode='custom',width=4096,height=4096),dict(type='display',mode='custom',width=1601,height=1200),
+                        dict(type='display',mode='auto-landscape',width=1600,height=1250,landscapeRatio=0),
+                        dict(type='display',mode='auto-landscape',width=1600,height=1250,landscapeRatio=True)]:
                 invalid=WS(port,'/control');invalid.send(bad)
                 assert invalid.sock.recv(1)==b'';invalid.close()
             print('PASS: passwordless HTTP/WS, touch/ownership, foreground/stale generations, real display-control callback, geometry validation and resize rate limit')

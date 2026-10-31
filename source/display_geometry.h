@@ -6,15 +6,46 @@
 #include <string.h>
 
 typedef struct { uint16_t width, height; } SCDisplaySize;
+#define SC_DISPLAY_MAX_EDGE 4096
+#define SC_DISPLAY_MAX_PIXELS (3840.0 * 2160.0)
+#define SC_DISPLAY_LANDSCAPE_RATIO 1.45
 /* Bound decoder load, preserve shape, and use even H.264 visible dimensions.
  * Do not round to macroblocks: a cropped H.264 frame need not be 16-aligned. */
 static inline SCDisplaySize sc_display_fit(double width, double height) {
     SCDisplaySize empty = {0, 0};
     if (!isfinite(width) || !isfinite(height) || width < 240 || height < 240 ||
         width > 16384 || height > 16384 || width / height < 0.4 || width / height > 4) return empty;
+    double scale = fmin(1, fmin(SC_DISPLAY_MAX_EDGE / width, SC_DISPLAY_MAX_EDGE / height));
+    scale = fmin(scale, sqrt(SC_DISPLAY_MAX_PIXELS / (width * height)));
+    /* Round down so neither edge nor the pixel budget can be exceeded. */
+    return (SCDisplaySize){(uint16_t)(2 * floor(width * scale / 2)),
+                           (uint16_t)(2 * floor(height * scale / 2))};
+}
+/* Keep the existing phone default and automatic browser width budget. Only
+ * custom output opts into larger widths; browser height is no longer 1080-capped. */
+static inline SCDisplaySize sc_display_phone_fit(double width, double height) {
+    if (!isfinite(width) || !isfinite(height) || width <= 0 || height <= 0) return (SCDisplaySize){0,0};
     double scale = fmin(1, fmin(1920 / width, 1080 / height));
     return (SCDisplaySize){(uint16_t)(2 * lround(width * scale / 2)),
                            (uint16_t)(2 * lround(height * scale / 2))};
+}
+static inline SCDisplaySize sc_display_custom(double width, double height) {
+    if (!isfinite(width) || !isfinite(height) || width < 240 || height < 240 ||
+        width > SC_DISPLAY_MAX_EDGE || height > SC_DISPLAY_MAX_EDGE ||
+        floor(width/2)*2 != width || floor(height/2)*2 != height ||
+        width*height > SC_DISPLAY_MAX_PIXELS || width/height < .4 || width/height > 4)
+        return (SCDisplaySize){0,0};
+    return (SCDisplaySize){(uint16_t)width,(uint16_t)height};
+}
+static inline SCDisplaySize sc_display_auto(double width, double height, double minAspect) {
+    SCDisplaySize size = sc_display_fit(width,height);
+    if (!size.width || (minAspect != 0 && (!isfinite(minAspect) || minAspect < 1.35 || minAspect > 2)))
+        return (SCDisplaySize){0,0};
+    double scale = fmin(1,1920.0 / size.width);
+    size.width = (uint16_t)(2 * floor(size.width * scale / 2));
+    size.height = (uint16_t)(2 * floor(size.height * scale / 2));
+    if (minAspect > 0) size.height = (uint16_t)fmin(size.height,2 * floor(size.width / minAspect / 2));
+    return size.height >= 240 ? size : (SCDisplaySize){0,0};
 }
 static inline SCDisplaySize sc_display_preset(const char *mode) {
     const struct { const char *name; uint16_t width, height; } presets[] = {

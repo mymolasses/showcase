@@ -1,5 +1,5 @@
 const assert=require('node:assert/strict');
-const {mapPoint,nals,parameterSets,annexB,parsePacket,displaySize}=require('../web/protocol.js');
+const {mapPoint,nals,parameterSets,annexB,parsePacket,displaySize,customDisplaySize,autoDisplaySize}=require('../web/protocol.js');
 const config=Buffer.from('0142001effe100046742001e01000268ce','hex');
 assert.equal(parameterSets(config).length,2);
 assert.equal(Buffer.from(annexB(parameterSets(config))).toString('hex'),'000000016742001e0000000168ce');
@@ -16,7 +16,21 @@ assert.deepEqual(mapPoint(rect,1920,1080,500,500,false),{x:960,y:540});
 assert.deepEqual(mapPoint(rect,1920,1080,0,0,true),{x:0,y:0});
 assert.deepEqual(mapPoint(rect,1920,1080,1000,1000,true,true),{x:1500,y:1080});
 assert.deepEqual(mapPoint(rect,1920,1080,0,0,true,true),{x:420,y:0});
-assert.deepEqual(displaySize(2796,1290),{width:1920,height:886});
+assert.deepEqual(displaySize(2796,1290),{width:2796,height:1290});
 assert.deepEqual(displaySize(1600,1000),{width:1600,height:1000});
 assert.equal(displaySize(Infinity,720),null);assert.equal(displaySize(100,720),null);
+assert.deepEqual(customDisplaySize(1600,1200),{width:1600,height:1200});
+assert.deepEqual(customDisplaySize(3840,2160),{width:3840,height:2160});
+for(const [w,h] of [[4096,4096],[1601,1100],[1600,NaN],[true,1200],[1600,239],[4098,1200]])assert.equal(customDisplaySize(w,h),null);
+assert.deepEqual(autoDisplaySize(1600,1250,1.45),{width:1600,height:1102});
+assert.deepEqual(autoDisplaySize(3200,2500,1.45),{width:1920,height:1324});
+assert.deepEqual(autoDisplaySize(1600,1250),{width:1600,height:1250});
+assert.deepEqual(autoDisplaySize(1600,1250,1.4),{width:1600,height:1142});
+assert.deepEqual(autoDisplaySize(1600,1250,1.6),{width:1600,height:1000});
+assert.deepEqual(autoDisplaySize(1600,900,1.45),{width:1600,height:900});
+for(const ratio of [1.3,NaN,Infinity,2.1])assert.equal(autoDisplaySize(1600,1250,ratio),null);
+for(let w=640;w<=6000;w+=137)for(let h=360;h<=4000;h+=91){
+  const size=displaySize(w,h);if(!size)continue;
+  assert(size.width<=4096&&size.height<=4096&&size.width*size.height<=3840*2160&&size.width%2===0&&size.height%2===0);
+}
 console.log('PASS: bounded AVC/config parsing, Annex-B conversion, media framing and fit/fill touch mapping');

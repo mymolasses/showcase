@@ -8,7 +8,7 @@ typedef bool (*ShowcaseBrowserTouch)(uint8_t phase, uint16_t x, uint16_t y,
                                     uint8_t contact, uint64_t hostNanos);
 typedef void (*ShowcaseBrowserResync)(void);
 typedef bool (*ShowcaseBrowserDisplay)(const char *mode, uint16_t width, uint16_t height,
-                                      uint16_t viewportWidth, uint16_t viewportHeight);
+                                      uint16_t viewportWidth, uint16_t viewportHeight, double landscapeRatio);
 void showcase_browser_display_handler(ShowcaseBrowserDisplay callback, uint16_t width, uint16_t height,
                                       uint16_t phoneWidth, uint16_t phoneHeight);
 void showcase_browser_phone_size(uint16_t width, uint16_t height);

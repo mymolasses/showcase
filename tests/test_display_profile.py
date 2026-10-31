@@ -76,11 +76,11 @@ static void check(double L, double S, uint64_t memory, unsigned cores, uint16_t 
 }
 
 int main(void) {
-    SCDisplaySize phone=sc_display_fit(2796,1290);
+    SCDisplaySize phone=sc_display_phone_fit(2796,1290);
     assert(phone.width==1920 && phone.height==886);
     SCDisplayRect right=sc_phone_area(932,430,0,59,21,59,2);
     assert(right.x==0 && right.y==0 && right.width==873 && right.height==409);
-    SCDisplaySize usable=sc_display_fit(right.width*3,right.height*3);
+    SCDisplaySize usable=sc_display_phone_fit(right.width*3,right.height*3);
     assert(usable.width==1920 && usable.height==900);
     SCDisplayRect left=sc_phone_area(932,430,0,59,21,59,3);
     assert(left.x==59 && left.width==right.width);
@@ -94,9 +94,23 @@ int main(void) {
     for (int width=640;width<=6000;width+=137) for (int height=360;height<=4000;height+=91) {
         SCDisplaySize size=sc_display_fit(width,height);
         if (!size.width) { assert((double)width/height<.4 || (double)width/height>4); continue; }
-        assert(size.width<=1920 && size.height<=1080 && size.width%2==0 && size.height%2==0);
-        assert(fabs((double)size.width/size.height-(double)width/height)/((double)width/height)<.006);
+        assert(size.width<=4096 && size.height<=4096 && size.width%2==0 && size.height%2==0);
+        assert((double)size.width*size.height<=SC_DISPLAY_MAX_PIXELS);
+        assert(fabs((double)size.width/size.height-(double)width/height)/((double)width/height)<.01);
     }
+    assert(sc_display_custom(1600,1200).height==1200);
+    assert(sc_display_custom(1920,1440).height==1440);
+    assert(sc_display_custom(3840,2160).height==2160);
+    assert(!sc_display_custom(4096,4096).width && !sc_display_custom(1601,1100).width);
+    assert(!sc_display_custom(NAN,1100).width && !sc_display_custom(1600,INFINITY).width);
+    SCDisplaySize maximum=sc_display_auto(1600,1250,1.45);
+    assert(maximum.width==1600 && maximum.height==1102 && (double)maximum.width/maximum.height>=1.45);
+    assert(sc_display_auto(1600,1250,0).height==1250);
+    assert(sc_display_auto(3200,2500,1.45).height==1324);
+    assert(sc_display_auto(1600,1250,1.4).height==1142);
+    assert(sc_display_auto(1600,1250,1.6).height==1000);
+    assert(sc_display_auto(1600,900,1.45).height==900);
+    assert(!sc_display_auto(1600,1250,1.3).width && !sc_display_auto(1600,1250,NAN).width);
     assert(!sc_display_fit(INFINITY,720).width && !sc_display_fit(100,720).width);
     assert(sc_display_preset("1600x1000").height==1000 && !sc_display_preset("9999x720").width);
     const double displays[][2] = {{2048,1536}, {2732,2048}, {2388,1668}, {2360,1640},

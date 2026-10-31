@@ -63,10 +63,22 @@
   }
   function displaySize(width,height) {
     if(!Number.isFinite(width)||!Number.isFinite(height)||width<240||height<240||width>16384||height>16384||width/height<.4||width/height>4)return null;
-    const scale=Math.min(1,1920/width,1080/height);
-    return {width:2*Math.round(width*scale/2),height:2*Math.round(height*scale/2)};
+    const scale=Math.min(1,4096/width,4096/height,Math.sqrt(3840*2160/(width*height)));
+    return {width:2*Math.floor(width*scale/2),height:2*Math.floor(height*scale/2)};
   }
-  const api = {mapPoint,nals,parameterSets,annexB,parsePacket,displaySize};
+  function customDisplaySize(width,height) {
+    if(!Number.isInteger(width)||!Number.isInteger(height)||width<240||height<240||width>4096||height>4096||width%2||height%2||width*height>3840*2160||width/height<.4||width/height>4)return null;
+    return {width,height};
+  }
+  function autoDisplaySize(width,height,minAspect=0) {
+    const size=displaySize(width,height);
+    if(!size || minAspect!==0 && (!Number.isFinite(minAspect)||minAspect<1.35||minAspect>2))return null;
+    const scale=Math.min(1,1920/size.width);
+    const result={width:2*Math.floor(size.width*scale/2),height:2*Math.floor(size.height*scale/2)};
+    if(minAspect>0)result.height=Math.min(result.height,2*Math.floor(result.width/minAspect/2));
+    return result.height>=240?result:null;
+  }
+  const api = {mapPoint,nals,parameterSets,annexB,parsePacket,displaySize,customDisplaySize,autoDisplaySize};
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.ShowcaseProtocol = api;
 })(typeof self !== 'undefined' ? self : globalThis);

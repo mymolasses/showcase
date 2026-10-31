@@ -1168,7 +1168,7 @@ static SCDisplaySize phone_display_size(void) {
     uint32_t packed=__atomic_load_n(&displayPhoneSize,__ATOMIC_RELAXED);
     if (packed) return (SCDisplaySize){packed>>16,packed&65535};
     CarPlayDisplayHardware h=carplay_display_hardware();
-    return sc_display_fit(h.nativeLong,h.nativeShort);
+    return sc_display_phone_fit(h.nativeLong,h.nativeShort);
 }
 static CarPlayDisplayHardware carplay_display_hardware(void) {
     static CarPlayDisplayHardware hardware;
@@ -1236,6 +1236,7 @@ static CarPlayDisplayProfile preferred_carplay_display_profile(void) {
             sc_display_fit([config[@"width"] doubleValue],[config[@"height"] doubleValue]);
         if (!output.width) output=(SCDisplaySize){1920,1080}; /* Until a browser reports its usable area. */
         profile.width=output.width; profile.height=output.height;
+        profile.pixelBudget=(uint64_t)output.width*output.height;
         profile.framesPerSecond = 30;
     }
     return profile;
@@ -2958,7 +2959,7 @@ static UIImage *showcase_star_image(CGFloat side);
     CGSize bounds=self.view.bounds.size;
     SCDisplayRect area=sc_phone_area(bounds.width,bounds.height,safe.top,safe.left,safe.bottom,safe.right,(int)side);
     if (UI_USER_INTERFACE_IDIOM()==UIUserInterfaceIdiomPhone && bounds.width>bounds.height) {
-        SCDisplaySize phone=sc_display_fit(area.width*self.view.window.screen.scale,area.height*self.view.window.screen.scale);
+        SCDisplaySize phone=sc_display_phone_fit(area.width*self.view.window.screen.scale,area.height*self.view.window.screen.scale);
         if (phone.width) {
             uint32_t packed=((uint32_t)phone.width<<16)|phone.height;
             if (__atomic_exchange_n(&displayPhoneSize,packed,__ATOMIC_RELAXED)!=packed) {
@@ -7625,28 +7626,73 @@ static BOOL g_settings_hardware_loading = NO;
     }];
 }
 
+- (void)applyBrowserOutputMode:(NSString *)mode size:(SCDisplaySize)size ratio:(double)ratio {
+    NSDictionary *saved=showcase_display_configuration();
+    NSDictionary *config=@{ @"mode":mode,@"width":@(size.width),@"height":@(size.height),
+        @"landscapeRatio":@(ratio),@"viewportWidth":saved[@"viewportWidth"] ?: @0,@"viewportHeight":saved[@"viewportHeight"] ?: @0 };
+    if (!showcase_save_display_configuration(config)) {
+        self.pageMessage=@"无法保存输出分辨率"; [self render]; return;
+    }
+    uint8_t changed=1; send_ipc_payload(MSG_DISPLAY_PREF,&changed,1);
+    [self pop];
+    [self.appDelegate applyBrowserDisplayWidth:size.width height:size.height];
+}
+
+- (void)editBrowserOutput:(BOOL)landscape {
+    NSDictionary *saved=showcase_display_configuration();
+    CarPlayDisplayProfile current=preferred_carplay_display_profile();
+    UIAlertController *alert=[UIAlertController alertControllerWithTitle:landscape ? @"自动左右分列" : @"自定义输出分辨率"
+        message:landscape ? @"比例下限 1.35–2.00，默认 1.45。越小允许的高度越大；若出现上下排列，请调大。网页按可用区域计算，实际布局由 CarPlay 决定。" :
+        @"宽高为 240–4096 的偶数，总像素不超过 8294400，宽高比 0.4–4。比例越接近浏览器越少黑边；过高可能变为上下排列。应用会重连 CarPlay。"
+        preferredStyle:UIAlertControllerStyleAlert];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
+        field.placeholder=landscape ? @"左右布局比例下限" : @"宽度（像素）";
+        field.keyboardType=landscape ? UIKeyboardTypeDecimalPad : UIKeyboardTypeNumberPad;
+        field.text=landscape ? [NSString stringWithFormat:@"%.2f",[saved[@"landscapeRatio"] doubleValue] ?: SC_DISPLAY_LANDSCAPE_RATIO] : [NSString stringWithFormat:@"%u",current.width];
+    }];
+    if (!landscape) [alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
+        field.placeholder=@"高度（像素）";field.keyboardType=UIKeyboardTypeNumberPad;
+        field.text=[NSString stringWithFormat:@"%u",current.height];
+    }];
+    __weak SettingsViewController *weakSelf=self;
+    __weak UIAlertController *weakAlert=alert;
+    [alert addAction:[UIAlertAction actionWithTitle:L(@"Cancel") style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"应用" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        (void)action;
+        double first=0,second=0;
+        NSScanner *scan=[NSScanner scannerWithString:weakAlert.textFields[0].text ?: @""];
+        BOOL valid=[scan scanDouble:&first] && scan.isAtEnd;
+        if (!landscape) { scan=[NSScanner scannerWithString:weakAlert.textFields[1].text ?: @""]; valid=valid && [scan scanDouble:&second] && scan.isAtEnd; }
+        SCDisplaySize size={0,0};
+        if (valid && landscape) {
+            double vw=[saved[@"viewportWidth"] doubleValue],vh=[saved[@"viewportHeight"] doubleValue];
+            size=sc_display_auto(vw ?: current.width,vh ?: current.height,first);
+        } else if (valid) size=sc_display_custom(first,second);
+        if (!size.width) { weakSelf.pageMessage=@"尺寸或比例超出范围，请重新填写。"; [weakSelf render]; return; }
+        [weakSelf applyBrowserOutputMode:landscape ? @"auto-landscape" : @"custom" size:size ratio:landscape ? first : 0];
+    }]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
 - (void)buildBrowserResolution:(SettingsPageBuilder *)b {
     CGFloat w=b.width;
     __weak SettingsViewController *weakSelf=self;
     NSDictionary *saved=showcase_display_configuration();
     NSString *mode=saved[@"mode"] ?: @"auto";
-    NSArray *modes=@[@"auto",@"phone",@"1920x1080",@"1600x900",@"1280x720",@"1600x1000",@"1440x1080",@"1920x960",@"1920x720"];
+    NSArray *modes=@[@"auto",@"auto-landscape",@"custom",@"phone",@"1920x1080",@"1600x900",@"1280x720",@"1600x1000",@"1440x1080",@"1920x960",@"1920x720"];
     [b card:^(SettingsCard *card) {
         for (NSString *option in modes) {
-            NSString *title=[option isEqual:@"auto"] ? @"Auto · 适配车机浏览器（默认）" : [option isEqual:@"phone"] ? @"Phone · 适配手机屏幕" : option;
+            NSString *title=[option isEqual:@"auto"] ? @"Auto · 适配车机浏览器（默认）" : [option isEqual:@"auto-landscape"] ? @"Auto · 左右分列最大高度…" : [option isEqual:@"custom"] ? @"Custom · 自定义宽高…" : [option isEqual:@"phone"] ? @"Phone · 适配手机屏幕" : option;
             [card addRow:[self choiceRow:title value:@"" checked:[mode isEqual:option] width:w action:^{
+                if ([option isEqual:@"custom"] || [option isEqual:@"auto-landscape"]) { [weakSelf editBrowserOutput:[option isEqual:@"auto-landscape"]]; return; }
                 CarPlayDisplayProfile current=preferred_carplay_display_profile();
                 SCDisplaySize size=[option isEqual:@"phone"] ? phone_display_size() : sc_display_preset(option.UTF8String);
                 if ([option isEqual:@"auto"]) size=(SCDisplaySize){current.width,current.height};
-                NSDictionary *config=@{ @"mode":option,@"width":@(size.width),@"height":@(size.height) };
-                if (!showcase_save_display_configuration(config)) return;
-                uint8_t changed=1; send_ipc_payload(MSG_DISPLAY_PREF,&changed,1);
-                [weakSelf pop];
-                [weakSelf.appDelegate applyBrowserDisplayWidth:size.width height:size.height];
+                [weakSelf applyBrowserOutputMode:option size:size ratio:0];
             }] height:52];
         }
     }];
-    [b message:@"自动模式由网页上报当前可用区域，手机模式按本机横屏与灵动岛避让区域计算。固定尺寸保持所选比例。源画面只有一路，另一端默认完整显示；改变源尺寸会自动重连 CarPlay。" color:[UIColor colorWithWhite:1 alpha:0.6]];
+    [b message:@"自动模式匹配浏览器可用区域；自动左右分列在所选比例下限内尽量增加高度，不能直接检测 CarPlay 内部布局。已取消 1080 高度限制；自定义最高单边 4096、总像素 8294400。源画面只有一路，改变尺寸会自动重连 CarPlay。" color:[UIColor colorWithWhite:1 alpha:0.6]];
 }
 
 - (void)buildResolution:(SettingsPageBuilder *)b {

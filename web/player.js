@@ -2,10 +2,12 @@
 (() => {
   'use strict';
   const $=id=>document.getElementById(id), surface=$('surface'), display=$('display');
-  const {mapPoint,displaySize}=ShowcaseProtocol, backends=ShowcaseRenderers;
+  const {mapPoint,displaySize,customDisplaySize,autoDisplaySize}=ShowcaseProtocol, backends=ShowcaseRenderers;
   let desired=true, active=false, displayed=false, fill=false, config=null, renderer=null, control=null;
   let retainedFrame=false;
   let outputMode='auto',outputInitialized=false,selectingOutput=false,outputTimer=null,lastOutputSent=-Infinity,viewport={};
+  let customSize=null,landscapeRatio=1.45,editingOutput=false;
+  const automaticOutput=()=>outputMode==='auto' || outputMode==='auto-landscape';
   let epoch=0, retry=0, reconnectTimer=null, socketTimer=null, startupTimer=null, statusBusy=false, pointer=null;
   let pendingMove=null, moveFrame=null, lastKeyRequest=-Infinity, failures=[], server=null;
   const metrics={received:0,bytes:0,drawn:0,reconnects:0,recoveries:0,lastReason:'首次连接',lastDrawAt:null,lastFailure:null};
@@ -17,11 +19,14 @@
     const height=Math.min(window.innerHeight || rect.height,visual?.height || Infinity);
     if(visual?.scale && Math.abs(visual.scale-1)>.02)return; // Pinch zoom is not a new display.
     if(surface.style){surface.style.width=width+'px';surface.style.height=height+'px';}
-    const density=Math.min(2,Math.max(1,window.devicePixelRatio || 1));
-    viewport={cssWidth:Math.round(width),cssHeight:Math.round(height),width:Math.round(width*density),height:Math.round(height*density)};
+    const devicePixelRatio=window.devicePixelRatio || 1,density=Math.min(2,Math.max(1,devicePixelRatio));
+    viewport={cssWidth:Math.round(width),cssHeight:Math.round(height),density,width:Math.round(width*density),height:Math.round(height*density),
+      devicePixelRatio,physicalWidth:Math.round(width*devicePixelRatio),physicalHeight:Math.round(height*devicePixelRatio),
+      screenWidth:window.screen?.width ?? null,screenHeight:window.screen?.height ?? null};
   }
   function outputTarget() {
-    if(outputMode==='auto')return displaySize(viewport.width,viewport.height);
+    if(automaticOutput())return autoDisplaySize(viewport.width,viewport.height,outputMode==='auto-landscape'?landscapeRatio:0);
+    if(outputMode==='custom')return customSize;
     if(outputMode==='phone') {
       // Island/phone scaling remains local. Rematch phone geometry only on
       // an explicit output selection, not on every safe-area layout change.
@@ -33,15 +38,16 @@
   }
   function outputMatches() {
     const target=outputTarget(), saved=server?.displayRequest;
-    const tolerance=outputMode==='auto' ? .01 : 0;
-    return target && saved?.mode===outputMode && Math.abs(saved.width-target.width)<=Math.max(2,target.width*tolerance) && Math.abs(saved.height-target.height)<=Math.max(2,target.height*tolerance);
+    const tolerance=automaticOutput() ? .01 : 0;
+    return target && saved?.mode===outputMode && (outputMode!=='auto-landscape' || Math.abs((saved.landscapeRatio || 1.45)-landscapeRatio)<.0001) && Math.abs(saved.width-target.width)<=Math.max(2,target.width*tolerance) && Math.abs(saved.height-target.height)<=Math.max(2,target.height*tolerance);
   }
   function queueOutput() {
-    if(outputTimer!==null || !server?.displayControl || outputMatches())return;
+    if(editingOutput || outputTimer!==null || !server?.displayControl || outputMatches())return;
     outputTimer=setTimeout(()=>{
       outputTimer=null;
-      if(!desired || document.hidden || !active || !outputTarget() || outputMatches() || performance.now()-lastOutputSent<8000)return;
-      if(send({type:'display',mode:outputMode,...(outputMode==='auto'?{width:viewport.width,height:viewport.height}:{})})) {
+      if(editingOutput || !desired || document.hidden || !active || !outputTarget() || outputMatches() || performance.now()-lastOutputSent<8000)return;
+      if(send({type:'display',mode:outputMode,...(automaticOutput()?{width:viewport.width,height:viewport.height}:outputMode==='custom'?customSize:{}),
+        ...(outputMode==='auto-landscape'?{landscapeRatio}:{})})) {
         lastOutputSent=performance.now();$('display-hint').textContent='正在应用输出比例，CarPlay 将重新连接，请保持手机 App 在前台…';
       }
     },2000);
@@ -50,13 +56,24 @@
     const selector=$('output-resolution');selector.disabled=!status?.displayControl;
     if(!status?.displayControl){$('display-hint').textContent='接收机尚未提供输出比例控制';return;}
     const saved=status.displayRequest || {mode:'auto'};
-    if(!outputInitialized || !selectingOutput){outputMode=saved.mode || 'auto';outputInitialized=true;}
+    if(!outputInitialized || !selectingOutput){
+      outputMode=saved.mode || 'auto';outputInitialized=true;
+      if(outputMode==='custom')customSize=customDisplaySize(saved.width,saved.height);
+      landscapeRatio=saved.landscapeRatio || 1.45;
+    }
     if(selectingOutput && outputMatches())selectingOutput=false;
     selector.value=outputMode;
-    const target=outputTarget(), prefix=outputMode==='auto'?'车机浏览器':outputMode==='phone'?'手机屏幕':'固定输出';
+    $('custom-output').hidden=outputMode!=='custom';$('landscape-output').hidden=outputMode!=='auto-landscape';
+    if(!editingOutput){
+      if(customSize){$('output-width').value=customSize.width;$('output-height').value=customSize.height;}
+      $('landscape-ratio').value=landscapeRatio;
+    }
+    const target=outputTarget(), prefix=outputMode==='auto-landscape'?'自动左右分列':outputMode==='auto'?'车机浏览器':outputMode==='phone'?'手机屏幕':'自选输出';
     const actual=status.width && status.height ? `${status.width} × ${status.height}`:'等待视频';
-    $('display-hint').textContent=status.displayError || `${prefix}：${target?`${target.width} × ${target.height}`:'等待尺寸'}；当前源 ${actual}。完整显示，不裁切。切换输出需重连 CarPlay。`;
-    if(outputMode==='auto' || selectingOutput)queueOutput();
+    const layoutHint=outputMode==='auto-landscape'?`左右比例下限 ${landscapeRatio.toFixed(2)}；若仍上下排列，请调大下限。`:
+      outputMode==='custom' && target && target.width/target.height<1.45?'当前比例较高，CarPlay 可能改为上下排列。':'';
+    $('display-hint').textContent=status.displayError || `${prefix}：${target?`${target.width} × ${target.height}`:'等待尺寸'}；当前源 ${actual}。浏览器 ${viewport.cssWidth} × ${viewport.cssHeight} CSS / ${viewport.physicalWidth} × ${viewport.physicalHeight} 像素。${layoutHint}完整显示，不裁切。切换需重连 CarPlay。`;
+    if(automaticOutput() || selectingOutput)queueOutput();
   }
   function send(object) {
     if(control?.readyState!==WebSocket.OPEN)return false;
@@ -157,7 +174,7 @@
   }
   for(const name of ['pointerup','pointercancel','lostpointercapture'])surface.addEventListener(name,lift);
   surface.addEventListener('contextmenu',event=>event.preventDefault());
-  function resized(){release();measureViewport();clearTimeout(outputTimer);outputTimer=null;if(outputMode==='auto')queueOutput();}
+  function resized(){release();measureViewport();clearTimeout(outputTimer);outputTimer=null;if(automaticOutput())queueOutput();}
   window.addEventListener('blur',()=>release());window.addEventListener('resize',resized);
   window.visualViewport?.addEventListener('resize',resized);
   document.addEventListener('fullscreenchange',resized);
@@ -179,13 +196,29 @@
   $('reconnect').onclick=()=>{metrics.reconnects++;metrics.lastReason='手动重连';desired=true;retry=0;failures=[];connect();};
   $('disconnect').onclick=()=>{desired=false;closeSockets();state('已断开，点重连恢复');notice('已断开');};
   $('fit').onclick=()=>{release();fill=!fill;document.body.classList.toggle('contain',!fill);$('fit').textContent=fill?'显示：铺满（裁切）':'显示：完整';};
-  $('output-resolution').onchange=()=>{release();outputMode=$('output-resolution').value;selectingOutput=true;clearTimeout(outputTimer);outputTimer=null;lastOutputSent=-Infinity;queueOutput();};
+  function selectOutput(){release();selectingOutput=true;clearTimeout(outputTimer);outputTimer=null;lastOutputSent=-Infinity;$('display-error').textContent='';}
+  $('output-resolution').onchange=()=>{
+    selectOutput();outputMode=$('output-resolution').value;editingOutput=outputMode==='custom';
+    if(editingOutput){customSize=customSize || customDisplaySize(config?.width || 1600,config?.height || 1000);if(customSize){$('output-width').value=customSize.width;$('output-height').value=customSize.height;}}
+    if(server)updateOutput(server);queueOutput();
+  };
+  for(const id of ['output-width','output-height','landscape-ratio'])$(id).oninput=()=>{editingOutput=true;selectingOutput=true;clearTimeout(outputTimer);outputTimer=null;};
+  $('custom-apply').onclick=()=>{
+    const size=customDisplaySize(Number($('output-width').value),Number($('output-height').value));
+    if(!size){$('display-error').textContent='宽高须为 240–4096 的偶数，总像素不超过 8294400，宽高比为 0.4–4。';return;}
+    customSize=size;editingOutput=false;selectOutput();queueOutput();if(server)updateOutput(server);
+  };
+  $('landscape-apply').onclick=()=>{
+    const value=Number($('landscape-ratio').value);
+    if(!Number.isFinite(value)||value<1.35||value>2){$('display-error').textContent='比例下限请填写 1.35–2.00；数值越小，允许的画面越高。';return;}
+    landscapeRatio=value;editingOutput=false;selectOutput();queueOutput();if(server)updateOutput(server);
+  };
   $('menu').onclick=()=>{$('toolbar').hidden=!$('toolbar').hidden;};
   let rateAt=performance.now(),rateReceived=0,rateBytes=0,rateDrawn=0,rates={receivedFps:0,presentedFps:null,bitrateMbps:0};
   function diagnosticSnapshot() {
     return {app:'Showcase+',version:server?.version || '等待接收机',build:server?.build || '',entry:location.origin,
       renderer:'webcodecs-worker',rendererLabel:backends.label,lastFailure:metrics.lastFailure,
-      resolution:config?`${config.width} × ${config.height}`:'等待视频',outputMode,viewport,outputTarget:outputTarget(),displayFit:fill?'cover':'contain',...rates,...renderer?.stats(),
+      resolution:config?`${config.width} × ${config.height}`:'等待视频',outputMode,viewport,outputTarget:outputTarget(),landscapeRatio:outputMode==='auto-landscape'?landscapeRatio:null,displayFit:fill?'cover':'contain',...rates,...renderer?.stats(),
       receivedFrames:metrics.received,recoveryCount:metrics.recoveries,reconnectCount:metrics.reconnects,lastReason:metrics.lastReason,
       documentVisibility:document.visibilityState || (document.hidden?'hidden':'visible'),retainedFrame,displayed,
       controlBufferedBytes:control?.bufferedAmount ?? 0,inputOwner:server?.inputOwner ?? 'none',sourceFrameAgeMs:server?.frameAgeMs ?? null,

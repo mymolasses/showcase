@@ -1,4 +1,14 @@
-# Showcase+ 1.6.1 / 1017
+# Showcase+ 1.7.0 / 1018
+
+- Add custom CarPlay output width/height in both the browser menu and phone Display settings; Apply once to reconnect, rather than reconnecting during typing.
+- Remove the 1080-pixel output height cap. Custom sizes use even dimensions, 240–4096 pixels per edge, a maximum of 8294400 pixels, and aspect ratios from 0.4 to 4.
+- Add automatic landscape output: fit the browser's measured usable area while maximizing height within an adjustable minimum width/height ratio (default 1.45, range 1.35–2.00). Browser resizing and fullscreen changes recalculate the target.
+- Show measured viewport, pixel density and output target in the browser and diagnostics. Persist custom dimensions and the landscape ratio across page/app restarts.
+- Retain the existing phone resolution budget and automatic browser width budget (1920) to avoid increasing default decode load. Custom output can request larger widths.
+- The browser cannot inspect the sender's Dashboard layout. Landscape output is a configurable geometry constraint, not a guarantee of Apple's internal layout; reduce height/increase the minimum ratio if the sender stacks the cards.
+- Keep the current Worker/WebCodecs renderer, touch mapping, Bluetooth audio and managed HTTPS renewal. Target iPhone/Tesla validation is still required.
+
+## 1.6.1 / 1017
 
 - Correct the concurrent activation regression test to accept either request completing first while requiring exactly one device binding, idempotent retries and persistent revocation. Application behavior is unchanged from 1.6.0.
 

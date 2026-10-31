@@ -6197,8 +6197,8 @@ static void start_mdns_reannounce_loop(DNSServiceRef airplayRef,
  * ═══════════════════════════════════════════════════════════════ */
 
 static volatile int32_t browser_resync_pending = 0;
-static bool browser_request_display(const char *mode,uint16_t width,uint16_t height,uint16_t vw,uint16_t vh) {
-    NSDictionary *config=@{ @"mode":@(mode),@"width":@(width),@"height":@(height),@"viewportWidth":@(vw),@"viewportHeight":@(vh) };
+static bool browser_request_display(const char *mode,uint16_t width,uint16_t height,uint16_t vw,uint16_t vh,double ratio) {
+    NSDictionary *config=@{ @"mode":@(mode),@"width":@(width),@"height":@(height),@"viewportWidth":@(vw),@"viewportHeight":@(vh),@"landscapeRatio":@(ratio) };
     if (!showcase_save_display_configuration(config)) return false;
     if (width!=g_display_width || height!=g_display_height) {
         uint8_t payload[]={width&255,width>>8,height&255,height>>8};

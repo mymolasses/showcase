@@ -252,18 +252,25 @@ static void handle_control(SCBrowserClient *c, NSData *payload) {
         if (![mode isKindOfClass:NSString.class] || mode.length>32) { drop_client(c); return; }
         SCDisplaySize target=sc_display_preset(mode.UTF8String);
         uint16_t vw=0, vh=0;
-        if ([mode isEqual:@"auto"]) {
+        double ratio=0;
+        if ([mode isEqual:@"auto"] || [mode isEqual:@"auto-landscape"] || [mode isEqual:@"custom"]) {
             double w,h;
             if (!number(message,@"width",&w) || !number(message,@"height",&h) || floor(w)!=w || floor(h)!=h) { drop_client(c); return; }
-            target=sc_display_fit(w,h); if (target.width) { vw=(uint16_t)w; vh=(uint16_t)h; }
+            if ([mode isEqual:@"auto-landscape"]) {
+                ratio=SC_DISPLAY_LANDSCAPE_RATIO;
+                if (message[@"landscapeRatio"] && !number(message,@"landscapeRatio",&ratio)) { drop_client(c); return; }
+                if (ratio<1.35 || ratio>2) { drop_client(c); return; }
+            }
+            target=[mode isEqual:@"custom"] ? sc_display_custom(w,h) : sc_display_auto(w,h,ratio);
+            if (target.width && ![mode isEqual:@"custom"]) { vw=(uint16_t)w; vh=(uint16_t)h; }
         } else if ([mode isEqual:@"phone"]) target=(SCDisplaySize){phoneWidth,phoneHeight};
         if (!target.width || !target.height) { drop_client(c); return; }
         c.heard=now;
         if (!displayCallback || !active || !configuration || pendingDisplay || now-lastDisplayRequest<8) return;
         if ([displayRequest[@"mode"] isEqual:mode] && [displayRequest[@"width"] unsignedIntValue]==target.width &&
-            [displayRequest[@"height"] unsignedIntValue]==target.height) return;
+            [displayRequest[@"height"] unsignedIntValue]==target.height && [displayRequest[@"landscapeRatio"] doubleValue]==ratio) return;
         release_touch(c); release_local();
-        pendingDisplay=@{ @"mode":mode,@"width":@(target.width),@"height":@(target.height),@"viewportWidth":@(vw),@"viewportHeight":@(vh) };
+        pendingDisplay=@{ @"mode":mode,@"width":@(target.width),@"height":@(target.height),@"viewportWidth":@(vw),@"viewportHeight":@(vh),@"landscapeRatio":@(ratio) };
         lastDisplayRequest=now;
         return;
     }
@@ -390,7 +397,7 @@ static void *browser_loop(void *unused) {
         if (request && resyncCallback) resyncCallback();
         if (nextDisplay && displayCallback) {
             bool saved=displayCallback([nextDisplay[@"mode"] UTF8String],[nextDisplay[@"width"] unsignedIntValue],
-                [nextDisplay[@"height"] unsignedIntValue],[nextDisplay[@"viewportWidth"] unsignedIntValue],[nextDisplay[@"viewportHeight"] unsignedIntValue]);
+                [nextDisplay[@"height"] unsignedIntValue],[nextDisplay[@"viewportWidth"] unsignedIntValue],[nextDisplay[@"viewportHeight"] unsignedIntValue],[nextDisplay[@"landscapeRatio"] doubleValue]);
             pthread_mutex_lock(&browserLock);
             if (saved) { displayRequest=nextDisplay; displayError=nil; }
             else displayError=@"无法保存输出分辨率，请检查手机日志";

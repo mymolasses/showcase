@@ -1,11 +1,12 @@
 # Showcase+
 
-> **Showcase+ 1.5.0 / 1015: one browser playback path.**
+> **Showcase+ 1.7.0 / 1018: custom resolution and automatic landscape sizing.**
 > A trusted HTTPS/WSS connection forwards the original H.264 stream to a dedicated browser Worker.
 > WebCodecs decodes it and OffscreenCanvas/WebGL2 draws it, without phone-side JPEG transcoding,
 > an HTML video element, MSE, WebRTC, or a software decoder. The five-mode selector and fallback
 > modes have been removed. Touch, Bluetooth audio, output resolution and reconnect remain.
 > See [browser setup and requirements](docs/BROWSER_MODES.md).
+> Browser and phone Display settings now offer custom width/height and automatic landscape output with an adjustable aspect-ratio floor. Output height is no longer capped at 1080; custom dimensions support up to 4096 per edge within an 8294400-pixel budget. Apple's Dashboard layout remains controlled by the sending iPhone.
 
 ## Updates
 
