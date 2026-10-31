@@ -4,7 +4,7 @@ const http=require('node:http'),https=require('node:https'),crypto=require('node
 const {once}=require('node:events'),{execFileSync}=require('node:child_process'),{chromium}=require('playwright');
 const root=path.resolve(__dirname,'..');
 const width=Number(process.env.SHOWCASE_TEST_WIDTH || 640),height=Number(process.env.SHOWCASE_TEST_HEIGHT || 360);
-assert(Number.isInteger(width)&&width>=320&&width<=1920&&Number.isInteger(height)&&height>=180&&height<=1080);
+assert(Number.isInteger(width)&&width>=320&&width<=4096&&Number.isInteger(height)&&height>=180&&height<=4096&&width*height<=3840*2160);
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 function wire(data){
   const b=Buffer.from(data),h=Buffer.alloc(b.length<126?2:b.length<65536?4:10);h[0]=0x82;
@@ -63,7 +63,7 @@ function wire(data){
     const base=`${tls?'https':'http'}://127.0.0.1:${port}`;await page.goto(base+'/status');
     for(const profile of ['baseline','main','high']){
       const encoded=await page.evaluate(async({profile,width,height})=>{
-        const codec='avc1.'+{baseline:'4200',main:'4d00',high:'6400'}[profile]+(width*height>640*360?'2a':'1e');
+        const codec='avc1.'+{baseline:'4200',main:'4d00',high:'6400'}[profile]+(width*height>1920*1080?'33':width*height>640*360?'2a':'1e');
         const frames=[];let description;
         const encoder=new VideoEncoder({output(chunk,meta){const b=new Uint8Array(chunk.byteLength);chunk.copyTo(b);frames.push({key:chunk.type==='key',bytes:[...b]});if(meta.decoderConfig?.description)description=[...new Uint8Array(meta.decoderConfig.description)];},error:e=>{throw e;}});
         encoder.configure({codec,width,height,framerate:30,bitrate:6000000,latencyMode:'realtime',avc:{format:'avc'}});
