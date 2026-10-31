@@ -26,9 +26,10 @@ assert.deepEqual(autoDisplaySize(1600,1250,1.45),{width:1600,height:1102});
 assert.deepEqual(autoDisplaySize(3200,2500,1.45),{width:1920,height:1324});
 assert.deepEqual(autoDisplaySize(1600,1250),{width:1600,height:1250});
 assert.deepEqual(autoDisplaySize(1600,1250,1.4),{width:1600,height:1142});
+assert.deepEqual(autoDisplaySize(1600,1250,1.31),{width:1600,height:1220});
 assert.deepEqual(autoDisplaySize(1600,1250,1.6),{width:1600,height:1000});
 assert.deepEqual(autoDisplaySize(1600,900,1.45),{width:1600,height:900});
-for(const ratio of [1.3,NaN,Infinity,2.1])assert.equal(autoDisplaySize(1600,1250,ratio),null);
+for(const ratio of [1.3,1.3099,NaN,Infinity,2.1])assert.equal(autoDisplaySize(1600,1250,ratio),null);
 for(let w=640;w<=6000;w+=137)for(let h=360;h<=4000;h+=91){
   const size=displaySize(w,h);if(!size)continue;
   assert(size.width<=4096&&size.height<=4096&&size.width*size.height<=3840*2160&&size.width%2===0&&size.height%2===0);

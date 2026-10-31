@@ -7642,7 +7642,7 @@ static BOOL g_settings_hardware_loading = NO;
     NSDictionary *saved=showcase_display_configuration();
     CarPlayDisplayProfile current=preferred_carplay_display_profile();
     UIAlertController *alert=[UIAlertController alertControllerWithTitle:landscape ? @"自动左右分列" : @"自定义输出分辨率"
-        message:landscape ? @"比例下限 1.35–2.00，默认 1.45。越小允许的高度越大；若出现上下排列，请调大。网页按可用区域计算，实际布局由 CarPlay 决定。" :
+        message:landscape ? @"比例下限 1.31–2.00，默认 1.45。越小允许的高度越大；若出现上下排列，请调大。网页按可用区域计算，实际布局由 CarPlay 决定。" :
         @"宽高为 240–4096 的偶数，总像素不超过 8294400，宽高比 0.4–4。比例越接近浏览器越少黑边；过高可能变为上下排列。应用会重连 CarPlay。"
         preferredStyle:UIAlertControllerStyleAlert];
     [alert addTextFieldWithConfigurationHandler:^(UITextField *field) {

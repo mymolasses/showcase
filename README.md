@@ -1,6 +1,6 @@
 # Showcase+
 
-> **Showcase+ 1.7.0 / 1018: custom resolution and automatic landscape sizing.**
+> **Showcase+ 1.7.1 / 1019: custom resolution and automatic landscape sizing.**
 > A trusted HTTPS/WSS connection forwards the original H.264 stream to a dedicated browser Worker.
 > WebCodecs decodes it and OffscreenCanvas/WebGL2 draws it, without phone-side JPEG transcoding,
 > an HTML video element, MSE, WebRTC, or a software decoder. The five-mode selector and fallback

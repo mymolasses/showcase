@@ -105,9 +105,13 @@ const wire=data=>{
     await page.setViewportSize({width:1600,height:1250});await ready('auto',1600,1250);
     await page.selectOption('#output-resolution','auto-landscape');await ready('auto-landscape',1600,1102);
     assert.equal(await page.locator('#landscape-output').isVisible(),true);
-    await page.fill('#landscape-ratio','1.40');await page.click('#landscape-apply');await ready('auto-landscape',1600,1142);
-    await page.reload();await ready('auto-landscape',1600,1142);
-    assert.equal((await page.evaluate(()=>showcaseDiagnostics())).landscapeRatio,1.4);
+    assert.equal(await page.locator('#landscape-ratio').getAttribute('min'),'1.31');
+    const ratioCount=requests.length;await page.fill('#landscape-ratio','1.30');await page.click('#landscape-apply');
+    await page.waitForTimeout(2500);assert.equal(requests.length,ratioCount);
+    assert.match(await page.locator('#display-error').textContent(),/1\.31/);
+    await page.fill('#landscape-ratio','1.31');await page.click('#landscape-apply');await ready('auto-landscape',1600,1220);
+    await page.reload();await ready('auto-landscape',1600,1220);
+    assert.equal((await page.evaluate(()=>showcaseDiagnostics())).landscapeRatio,1.31);
     await page.setViewportSize({width:1600,height:900});await ready('auto-landscape',1600,900);
     await page.click('#menu');await page.screenshot({path:path.join(root,'build','browser-landscape-options.png')});
     assert.deepEqual(errors,[]);console.log('PASS: real Chrome auto/custom/landscape, >1080 height, explicit Apply, validation, persistence, resize, remote preference and resized touch');

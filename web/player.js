@@ -210,7 +210,7 @@
   };
   $('landscape-apply').onclick=()=>{
     const value=Number($('landscape-ratio').value);
-    if(!Number.isFinite(value)||value<1.35||value>2){$('display-error').textContent='比例下限请填写 1.35–2.00；数值越小，允许的画面越高。';return;}
+    if(!Number.isFinite(value)||value<1.31||value>2){$('display-error').textContent='比例下限请填写 1.31–2.00；数值越小，允许的画面越高。';return;}
     landscapeRatio=value;editingOutput=false;selectOutput();queueOutput();if(server)updateOutput(server);
   };
   $('menu').onclick=()=>{$('toolbar').hidden=!$('toolbar').hidden;};

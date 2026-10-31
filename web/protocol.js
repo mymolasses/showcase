@@ -72,7 +72,7 @@
   }
   function autoDisplaySize(width,height,minAspect=0) {
     const size=displaySize(width,height);
-    if(!size || minAspect!==0 && (!Number.isFinite(minAspect)||minAspect<1.35||minAspect>2))return null;
+    if(!size || minAspect!==0 && (!Number.isFinite(minAspect)||minAspect<1.31||minAspect>2))return null;
     const scale=Math.min(1,1920/size.width);
     const result={width:2*Math.floor(size.width*scale/2),height:2*Math.floor(size.height*scale/2)};
     if(minAspect>0)result.height=Math.min(result.height,2*Math.floor(result.width/minAspect/2));

@@ -259,7 +259,7 @@ static void handle_control(SCBrowserClient *c, NSData *payload) {
             if ([mode isEqual:@"auto-landscape"]) {
                 ratio=SC_DISPLAY_LANDSCAPE_RATIO;
                 if (message[@"landscapeRatio"] && !number(message,@"landscapeRatio",&ratio)) { drop_client(c); return; }
-                if (ratio<1.35 || ratio>2) { drop_client(c); return; }
+                if (ratio<1.31 || ratio>2) { drop_client(c); return; }
             }
             target=[mode isEqual:@"custom"] ? sc_display_custom(w,h) : sc_display_auto(w,h,ratio);
             if (target.width && ![mode isEqual:@"custom"]) { vw=(uint16_t)w; vh=(uint16_t)h; }

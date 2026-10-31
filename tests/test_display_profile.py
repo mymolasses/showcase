@@ -108,6 +108,8 @@ int main(void) {
     assert(sc_display_auto(1600,1250,0).height==1250);
     assert(sc_display_auto(3200,2500,1.45).height==1324);
     assert(sc_display_auto(1600,1250,1.4).height==1142);
+    assert(sc_display_auto(1600,1250,1.31).height==1220);
+    assert(!sc_display_auto(1600,1250,1.3099).width);
     assert(sc_display_auto(1600,1250,1.6).height==1000);
     assert(sc_display_auto(1600,900,1.45).height==900);
     assert(!sc_display_auto(1600,1250,1.3).width && !sc_display_auto(1600,1250,NAN).width);

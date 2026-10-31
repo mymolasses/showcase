@@ -39,7 +39,7 @@ static inline SCDisplaySize sc_display_custom(double width, double height) {
 }
 static inline SCDisplaySize sc_display_auto(double width, double height, double minAspect) {
     SCDisplaySize size = sc_display_fit(width,height);
-    if (!size.width || (minAspect != 0 && (!isfinite(minAspect) || minAspect < 1.35 || minAspect > 2)))
+    if (!size.width || (minAspect != 0 && (!isfinite(minAspect) || minAspect < 1.31 || minAspect > 2)))
         return (SCDisplaySize){0,0};
     double scale = fmin(1,1920.0 / size.width);
     size.width = (uint16_t)(2 * floor(size.width * scale / 2));

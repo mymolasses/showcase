@@ -242,15 +242,16 @@ def main():
             while status()['displayRequest'].get('mode')!='custom' and time.monotonic()<deadline: time.sleep(.03)
             assert status()['displayRequest']['height']==1200
             time.sleep(8)
-            display_control.send(dict(type='display',mode='auto-landscape',width=1600,height=1250,landscapeRatio=1.4))
-            assert wait_event('DISPLAY')=='DISPLAY auto-landscape 1600 1142 1600 1250'
+            display_control.send(dict(type='display',mode='auto-landscape',width=1600,height=1250,landscapeRatio=1.31))
+            assert wait_event('DISPLAY')=='DISPLAY auto-landscape 1600 1220 1600 1250'
             deadline=time.monotonic()+2
             while status()['displayRequest'].get('mode')!='auto-landscape' and time.monotonic()<deadline: time.sleep(.03)
-            assert status()['displayRequest']['landscapeRatio']==1.4
+            assert status()['displayRequest']['landscapeRatio']==1.31
             display_control.close(); sockets.remove(display_control)
             for bad in [dict(type='display',mode='auto',width=True,height=720),dict(type='display',mode='9999x100'),dict(type='display',mode='auto',width=0,height=720),
                         dict(type='display',mode='custom',width=4096,height=4096),dict(type='display',mode='custom',width=1601,height=1200),
                         dict(type='display',mode='auto-landscape',width=1600,height=1250,landscapeRatio=0),
+                        dict(type='display',mode='auto-landscape',width=1600,height=1250,landscapeRatio=1.3099),
                         dict(type='display',mode='auto-landscape',width=1600,height=1250,landscapeRatio=True)]:
                 invalid=WS(port,'/control');invalid.send(bad)
                 assert invalid.sock.recv(1)==b'';invalid.close()

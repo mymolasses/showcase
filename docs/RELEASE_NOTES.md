@@ -1,4 +1,10 @@
-# Showcase+ 1.7.0 / 1018
+# Showcase+ 1.7.1 / 1019
+
+- Allow the automatic landscape minimum aspect ratio to be set as low as 1.31 in the browser and phone settings. Keep the default at 1.45 and the upper limit at 2.00.
+- Update native and browser validation, error messages and the numeric input minimum together. Retain the selected ratio across reloads and restarts.
+- Verify acceptance at 1.31 and rejection below it in geometry, native control and real Chrome tests. At a 1600×1250 viewport, 1.31 requests 1600×1220 output; the sending iPhone still determines Dashboard layout.
+
+## 1.7.0 / 1018
 
 - Add custom CarPlay output width/height in both the browser menu and phone Display settings; Apply once to reconnect, rather than reconnecting during typing.
 - Remove the 1080-pixel output height cap. Custom sizes use even dimensions, 240–4096 pixels per edge, a maximum of 8294400 pixels, and aspect ratios from 0.4 to 4.
