@@ -7642,11 +7642,11 @@ static BOOL g_settings_hardware_loading = NO;
     NSDictionary *saved=showcase_display_configuration();
     CarPlayDisplayProfile current=preferred_carplay_display_profile();
     UIAlertController *alert=[UIAlertController alertControllerWithTitle:landscape ? @"自动左右分列" : @"自定义输出分辨率"
-        message:landscape ? @"比例下限 1.31–2.00，默认 1.45。越小允许的高度越大；若出现上下排列，请调大。网页按可用区域计算，实际布局由 CarPlay 决定。" :
+        message:landscape ? @"正数比例自由调整，应用时保留两位小数，默认 1.45。1.30 是已知内部布局切换参考阈值：大于时左右，小于或等于时上下；按 CarPlay 内部区域判断，实际输出比例可能不同。" :
         @"宽高为 240–4096 的偶数，总像素不超过 8294400，宽高比 0.4–4。比例越接近浏览器越少黑边；过高可能变为上下排列。应用会重连 CarPlay。"
         preferredStyle:UIAlertControllerStyleAlert];
     [alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
-        field.placeholder=landscape ? @"左右布局比例下限" : @"宽度（像素）";
+        field.placeholder=landscape ? @"宽高比（宽÷高）" : @"宽度（像素）";
         field.keyboardType=landscape ? UIKeyboardTypeDecimalPad : UIKeyboardTypeNumberPad;
         field.text=landscape ? [NSString stringWithFormat:@"%.2f",[saved[@"landscapeRatio"] doubleValue] ?: SC_DISPLAY_LANDSCAPE_RATIO] : [NSString stringWithFormat:@"%u",current.width];
     }];
@@ -7665,10 +7665,11 @@ static BOOL g_settings_hardware_loading = NO;
         if (!landscape) { scan=[NSScanner scannerWithString:weakAlert.textFields[1].text ?: @""]; valid=valid && [scan scanDouble:&second] && scan.isAtEnd; }
         SCDisplaySize size={0,0};
         if (valid && landscape) {
+            first=sc_display_ratio(first);
             double vw=[saved[@"viewportWidth"] doubleValue],vh=[saved[@"viewportHeight"] doubleValue];
-            size=sc_display_auto(vw ?: current.width,vh ?: current.height,first);
+            if (first) size=sc_display_auto(vw ?: current.width,vh ?: current.height,first);
         } else if (valid) size=sc_display_custom(first,second);
-        if (!size.width) { weakSelf.pageMessage=@"尺寸或比例超出范围，请重新填写。"; [weakSelf render]; return; }
+        if (!size.width) { weakSelf.pageMessage=@"请填写有效尺寸或正数比例；当前窗口下输出高度至少为 240 像素。"; [weakSelf render]; return; }
         [weakSelf applyBrowserOutputMode:landscape ? @"auto-landscape" : @"custom" size:size ratio:landscape ? first : 0];
     }]];
     [self presentViewController:alert animated:YES completion:nil];
@@ -7692,7 +7693,7 @@ static BOOL g_settings_hardware_loading = NO;
             }] height:52];
         }
     }];
-    [b message:@"自动模式匹配浏览器可用区域；自动左右分列在所选比例下限内尽量增加高度，不能直接检测 CarPlay 内部布局。已取消 1080 高度限制；自定义最高单边 4096、总像素 8294400。源画面只有一路，改变尺寸会自动重连 CarPlay。" color:[UIColor colorWithWhite:1 alpha:0.6]];
+    [b message:@"比例可自由填写正数，保留两位小数。1.30 是内部布局切换参考阈值，不是整个输出画面的固定阈值。网页按可用区域计算最大高度，不能直接检测 CarPlay 内部布局；尺寸保护仍保留。源画面只有一路，改变尺寸会自动重连 CarPlay。" color:[UIColor colorWithWhite:1 alpha:0.6]];
 }
 
 - (void)buildResolution:(SettingsPageBuilder *)b {

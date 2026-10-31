@@ -1,5 +1,5 @@
 const assert=require('node:assert/strict');
-const {mapPoint,nals,parameterSets,annexB,parsePacket,displaySize,customDisplaySize,autoDisplaySize}=require('../web/protocol.js');
+const {mapPoint,nals,parameterSets,annexB,parsePacket,displaySize,customDisplaySize,autoDisplaySize,normalizeLandscapeRatio}=require('../web/protocol.js');
 const config=Buffer.from('0142001effe100046742001e01000268ce','hex');
 assert.equal(parameterSets(config).length,2);
 assert.equal(Buffer.from(annexB(parameterSets(config))).toString('hex'),'000000016742001e0000000168ce');
@@ -29,7 +29,15 @@ assert.deepEqual(autoDisplaySize(1600,1250,1.4),{width:1600,height:1142});
 assert.deepEqual(autoDisplaySize(1600,1250,1.31),{width:1600,height:1220});
 assert.deepEqual(autoDisplaySize(1600,1250,1.6),{width:1600,height:1000});
 assert.deepEqual(autoDisplaySize(1600,900,1.45),{width:1600,height:900});
-for(const ratio of [1.3,1.3099,NaN,Infinity,2.1])assert.equal(autoDisplaySize(1600,1250,ratio),null);
+assert.deepEqual(autoDisplaySize(1600,1250,1.30),{width:1600,height:1230});
+assert.deepEqual(autoDisplaySize(1600,1250,1.20),{width:1600,height:1250});
+assert.deepEqual(autoDisplaySize(1600,1250,2.50),{width:1600,height:640});
+assert.deepEqual(autoDisplaySize(1600,1250,4.50),{width:1600,height:354});
+assert.deepEqual(displaySize(1600,354),{width:1600,height:354});
+assert.equal(normalizeLandscapeRatio(1.296),1.30);assert.equal(normalizeLandscapeRatio(1.294),1.29);
+assert.equal(normalizeLandscapeRatio(.01),.01);
+for(const ratio of [0,-1,.001,NaN,Infinity,Number.MAX_VALUE])assert.equal(normalizeLandscapeRatio(ratio),null);
+for(const ratio of [-1,.001,NaN,Infinity,9])assert.equal(autoDisplaySize(1600,1250,ratio),null);
 for(let w=640;w<=6000;w+=137)for(let h=360;h<=4000;h+=91){
   const size=displaySize(w,h);if(!size)continue;
   assert(size.width<=4096&&size.height<=4096&&size.width*size.height<=3840*2160&&size.width%2===0&&size.height%2===0);

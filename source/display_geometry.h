@@ -14,7 +14,7 @@ typedef struct { uint16_t width, height; } SCDisplaySize;
 static inline SCDisplaySize sc_display_fit(double width, double height) {
     SCDisplaySize empty = {0, 0};
     if (!isfinite(width) || !isfinite(height) || width < 240 || height < 240 ||
-        width > 16384 || height > 16384 || width / height < 0.4 || width / height > 4) return empty;
+        width > 16384 || height > 16384) return empty;
     double scale = fmin(1, fmin(SC_DISPLAY_MAX_EDGE / width, SC_DISPLAY_MAX_EDGE / height));
     scale = fmin(scale, sqrt(SC_DISPLAY_MAX_PIXELS / (width * height)));
     /* Round down so neither edge nor the pixel budget can be exceeded. */
@@ -37,10 +37,17 @@ static inline SCDisplaySize sc_display_custom(double width, double height) {
         return (SCDisplaySize){0,0};
     return (SCDisplaySize){(uint16_t)width,(uint16_t)height};
 }
+/* A user ratio has no policy floor/ceiling; positive finite values are rounded
+ * to hundredths. Zero is reserved for the ordinary automatic viewport mode. */
+static inline double sc_display_ratio(double value) {
+    if (!isfinite(value) || value <= 0) return 0;
+    double rounded = round(value * 100) / 100;
+    return isfinite(rounded) && rounded > 0 ? rounded : 0;
+}
 static inline SCDisplaySize sc_display_auto(double width, double height, double minAspect) {
     SCDisplaySize size = sc_display_fit(width,height);
-    if (!size.width || (minAspect != 0 && (!isfinite(minAspect) || minAspect < 1.31 || minAspect > 2)))
-        return (SCDisplaySize){0,0};
+    if (!size.width) return (SCDisplaySize){0,0};
+    if (minAspect != 0) { minAspect=sc_display_ratio(minAspect); if (!minAspect) return (SCDisplaySize){0,0}; }
     double scale = fmin(1,1920.0 / size.width);
     size.width = (uint16_t)(2 * floor(size.width * scale / 2));
     size.height = (uint16_t)(2 * floor(size.height * scale / 2));

@@ -1,4 +1,12 @@
-# Showcase+ 1.7.1 / 1019
+# Showcase+ 1.7.2 / 1020
+
+- Remove the fixed lower and upper input limits for the automatic landscape ratio. Accept finite positive values, round them to two decimal places on Apply, and display two decimal places in both the browser and phone settings. Keep the default at 1.45.
+- Add a 1.30 layout-threshold hint: the known Dashboard implementation uses its internal view width/height, which can differ from the full output ratio. This is a reference, not a guarantee for every sender/iOS version.
+- Retain supported pixel-size and total-pixel protections. A requested ratio that cannot generate a valid output size produces an explanation instead of being saved silently.
+- Verify ratios below 1.30 and above the former 2.00 ceiling, decimal rounding, persistence, invalid values, native control and real Chrome playback.
+- The v1.7.1 publication was cancelled before release when the requested ratio behavior changed.
+
+## 1.7.1 / 1019 (superseded; not published)
 
 - Allow the automatic landscape minimum aspect ratio to be set as low as 1.31 in the browser and phone settings. Keep the default at 1.45 and the upper limit at 2.00.
 - Update native and browser validation, error messages and the numeric input minimum together. Retain the selected ratio across reloads and restarts.

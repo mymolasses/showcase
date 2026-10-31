@@ -93,7 +93,7 @@ int main(void) {
     assert(!sc_display_touch(873,409,1920,1080,0,204.5,false,false,&tx,&ty));
     for (int width=640;width<=6000;width+=137) for (int height=360;height<=4000;height+=91) {
         SCDisplaySize size=sc_display_fit(width,height);
-        if (!size.width) { assert((double)width/height<.4 || (double)width/height>4); continue; }
+        assert(size.width);
         assert(size.width<=4096 && size.height<=4096 && size.width%2==0 && size.height%2==0);
         assert((double)size.width*size.height<=SC_DISPLAY_MAX_PIXELS);
         assert(fabs((double)size.width/size.height-(double)width/height)/((double)width/height)<.01);
@@ -109,10 +109,18 @@ int main(void) {
     assert(sc_display_auto(3200,2500,1.45).height==1324);
     assert(sc_display_auto(1600,1250,1.4).height==1142);
     assert(sc_display_auto(1600,1250,1.31).height==1220);
-    assert(!sc_display_auto(1600,1250,1.3099).width);
+    assert(sc_display_auto(1600,1250,1.3099).height==1220);
+    assert(sc_display_auto(1600,1250,1.30).height==1230);
+    assert(sc_display_auto(1600,1250,1.20).height==1250);
+    assert(sc_display_auto(1600,1250,2.50).height==640);
+    assert(sc_display_auto(1600,1250,4.50).height==354);
+    assert(sc_display_fit(1600,354).height==354); /* Persisted automatic ratio must survive profile reload. */
+    assert(sc_display_ratio(1.296)==1.30 && sc_display_ratio(1.294)==1.29);
+    assert(!sc_display_ratio(0) && !sc_display_ratio(-1) && !sc_display_ratio(.001) && !sc_display_ratio(INFINITY));
     assert(sc_display_auto(1600,1250,1.6).height==1000);
     assert(sc_display_auto(1600,900,1.45).height==900);
-    assert(!sc_display_auto(1600,1250,1.3).width && !sc_display_auto(1600,1250,NAN).width);
+    assert(!sc_display_auto(1600,1250,-1).width && !sc_display_auto(1600,1250,NAN).width);
+    assert(!sc_display_auto(1600,1250,9).width); /* Pixel-height protection, not a ratio policy. */
     assert(!sc_display_fit(INFINITY,720).width && !sc_display_fit(100,720).width);
     assert(sc_display_preset("1600x1000").height==1000 && !sc_display_preset("9999x720").width);
     const double displays[][2] = {{2048,1536}, {2732,2048}, {2388,1668}, {2360,1640},

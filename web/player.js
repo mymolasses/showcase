@@ -2,7 +2,7 @@
 (() => {
   'use strict';
   const $=id=>document.getElementById(id), surface=$('surface'), display=$('display');
-  const {mapPoint,displaySize,customDisplaySize,autoDisplaySize}=ShowcaseProtocol, backends=ShowcaseRenderers;
+  const {mapPoint,displaySize,customDisplaySize,autoDisplaySize,normalizeLandscapeRatio}=ShowcaseProtocol, backends=ShowcaseRenderers;
   let desired=true, active=false, displayed=false, fill=false, config=null, renderer=null, control=null;
   let retainedFrame=false;
   let outputMode='auto',outputInitialized=false,selectingOutput=false,outputTimer=null,lastOutputSent=-Infinity,viewport={};
@@ -59,18 +59,18 @@
     if(!outputInitialized || !selectingOutput){
       outputMode=saved.mode || 'auto';outputInitialized=true;
       if(outputMode==='custom')customSize=customDisplaySize(saved.width,saved.height);
-      landscapeRatio=saved.landscapeRatio || 1.45;
+      landscapeRatio=normalizeLandscapeRatio(saved.landscapeRatio) || 1.45;
     }
     if(selectingOutput && outputMatches())selectingOutput=false;
     selector.value=outputMode;
     $('custom-output').hidden=outputMode!=='custom';$('landscape-output').hidden=outputMode!=='auto-landscape';
     if(!editingOutput){
       if(customSize){$('output-width').value=customSize.width;$('output-height').value=customSize.height;}
-      $('landscape-ratio').value=landscapeRatio;
+      $('landscape-ratio').value=landscapeRatio.toFixed(2);
     }
     const target=outputTarget(), prefix=outputMode==='auto-landscape'?'自动左右分列':outputMode==='auto'?'车机浏览器':outputMode==='phone'?'手机屏幕':'自选输出';
     const actual=status.width && status.height ? `${status.width} × ${status.height}`:'等待视频';
-    const layoutHint=outputMode==='auto-landscape'?`左右比例下限 ${landscapeRatio.toFixed(2)}；若仍上下排列，请调大下限。`:
+    const layoutHint=outputMode==='auto-landscape'?`宽高比 ${landscapeRatio.toFixed(2)}；1.30 是内部布局切换参考阈值，实际按 CarPlay 内部区域判断。`:
       outputMode==='custom' && target && target.width/target.height<1.45?'当前比例较高，CarPlay 可能改为上下排列。':'';
     $('display-hint').textContent=status.displayError || `${prefix}：${target?`${target.width} × ${target.height}`:'等待尺寸'}；当前源 ${actual}。浏览器 ${viewport.cssWidth} × ${viewport.cssHeight} CSS / ${viewport.physicalWidth} × ${viewport.physicalHeight} 像素。${layoutHint}完整显示，不裁切。切换需重连 CarPlay。`;
     if(automaticOutput() || selectingOutput)queueOutput();
@@ -209,8 +209,9 @@
     customSize=size;editingOutput=false;selectOutput();queueOutput();if(server)updateOutput(server);
   };
   $('landscape-apply').onclick=()=>{
-    const value=Number($('landscape-ratio').value);
-    if(!Number.isFinite(value)||value<1.31||value>2){$('display-error').textContent='比例下限请填写 1.31–2.00；数值越小，允许的画面越高。';return;}
+    const value=normalizeLandscapeRatio(Number($('landscape-ratio').value));
+    if(value===null){$('display-error').textContent='请输入大于 0 的比例，应用时保留两位小数，例如 1.30。';return;}
+    if(!autoDisplaySize(viewport.width,viewport.height,value)){$('display-error').textContent='当前窗口无法生成有效尺寸，请调整比例；输出高度至少为 240 像素。';return;}
     landscapeRatio=value;editingOutput=false;selectOutput();queueOutput();if(server)updateOutput(server);
   };
   $('menu').onclick=()=>{$('toolbar').hidden=!$('toolbar').hidden;};

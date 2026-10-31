@@ -105,15 +105,21 @@ const wire=data=>{
     await page.setViewportSize({width:1600,height:1250});await ready('auto',1600,1250);
     await page.selectOption('#output-resolution','auto-landscape');await ready('auto-landscape',1600,1102);
     assert.equal(await page.locator('#landscape-output').isVisible(),true);
-    assert.equal(await page.locator('#landscape-ratio').getAttribute('min'),'1.31');
-    const ratioCount=requests.length;await page.fill('#landscape-ratio','1.30');await page.click('#landscape-apply');
+    assert.equal(await page.locator('#landscape-ratio').getAttribute('min'),null);
+    assert.equal(await page.locator('#landscape-ratio').getAttribute('max'),null);
+    assert.match(await page.locator('#landscape-output').textContent(),/1\.30.*阈值/);
+    const ratioCount=requests.length;await page.fill('#landscape-ratio','0');await page.click('#landscape-apply');
     await page.waitForTimeout(2500);assert.equal(requests.length,ratioCount);
-    assert.match(await page.locator('#display-error').textContent(),/1\.31/);
-    await page.fill('#landscape-ratio','1.31');await page.click('#landscape-apply');await ready('auto-landscape',1600,1220);
-    await page.reload();await ready('auto-landscape',1600,1220);
-    assert.equal((await page.evaluate(()=>showcaseDiagnostics())).landscapeRatio,1.31);
+    assert.match(await page.locator('#display-error').textContent(),/大于 0/);
+    await page.fill('#landscape-ratio','1.296');await page.click('#landscape-apply');await ready('auto-landscape',1600,1230);
+    assert.equal(await page.locator('#landscape-ratio').inputValue(),'1.30');
+    await page.reload();await ready('auto-landscape',1600,1230);
+    assert.equal((await page.evaluate(()=>showcaseDiagnostics())).landscapeRatio,1.30);
+    await page.click('#menu');await page.fill('#landscape-ratio','1.20');await page.click('#landscape-apply');await ready('auto-landscape',1600,1250);
+    await page.fill('#landscape-ratio','2.50');await page.click('#landscape-apply');await ready('auto-landscape',1600,640);
+    await page.fill('#landscape-ratio','1.30');await page.click('#landscape-apply');await ready('auto-landscape',1600,1230);
     await page.setViewportSize({width:1600,height:900});await ready('auto-landscape',1600,900);
-    await page.click('#menu');await page.screenshot({path:path.join(root,'build','browser-landscape-options.png')});
+    await page.screenshot({path:path.join(root,'build','browser-landscape-options.png')});
     assert.deepEqual(errors,[]);console.log('PASS: real Chrome auto/custom/landscape, >1080 height, explicit Apply, validation, persistence, resize, remote preference and resized touch');
   } finally {clearInterval(timer);if(browser)await browser.close();for(const s of sockets)s.destroy();await new Promise(resolve=>server.close(resolve));}
 })().catch(error=>{console.error(error);process.exitCode=1;});

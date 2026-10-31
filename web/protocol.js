@@ -62,7 +62,7 @@
     throw Error('Invalid browser media packet');
   }
   function displaySize(width,height) {
-    if(!Number.isFinite(width)||!Number.isFinite(height)||width<240||height<240||width>16384||height>16384||width/height<.4||width/height>4)return null;
+    if(!Number.isFinite(width)||!Number.isFinite(height)||width<240||height<240||width>16384||height>16384)return null;
     const scale=Math.min(1,4096/width,4096/height,Math.sqrt(3840*2160/(width*height)));
     return {width:2*Math.floor(width*scale/2),height:2*Math.floor(height*scale/2)};
   }
@@ -70,15 +70,21 @@
     if(!Number.isInteger(width)||!Number.isInteger(height)||width<240||height<240||width>4096||height>4096||width%2||height%2||width*height>3840*2160||width/height<.4||width/height>4)return null;
     return {width,height};
   }
+  function normalizeLandscapeRatio(value) {
+    if(!Number.isFinite(value)||value<=0)return null;
+    const rounded=Math.round(value*100)/100;
+    return Number.isFinite(rounded)&&rounded>0?rounded:null;
+  }
   function autoDisplaySize(width,height,minAspect=0) {
     const size=displaySize(width,height);
-    if(!size || minAspect!==0 && (!Number.isFinite(minAspect)||minAspect<1.31||minAspect>2))return null;
+    if(!size)return null;
+    if(minAspect!==0){minAspect=normalizeLandscapeRatio(minAspect);if(minAspect===null)return null;}
     const scale=Math.min(1,1920/size.width);
     const result={width:2*Math.floor(size.width*scale/2),height:2*Math.floor(size.height*scale/2)};
     if(minAspect>0)result.height=Math.min(result.height,2*Math.floor(result.width/minAspect/2));
     return result.height>=240?result:null;
   }
-  const api = {mapPoint,nals,parameterSets,annexB,parsePacket,displaySize,customDisplaySize,autoDisplaySize};
+  const api = {mapPoint,nals,parameterSets,annexB,parsePacket,displaySize,customDisplaySize,autoDisplaySize,normalizeLandscapeRatio};
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.ShowcaseProtocol = api;
 })(typeof self !== 'undefined' ? self : globalThis);
