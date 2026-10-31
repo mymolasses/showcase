@@ -93,7 +93,9 @@ function wire(data){
       await waitFor(n=>showcaseDiagnostics().drawnFrames>n,snapshot);
       await page.mouse.click(500,400);await sleep(100);assert(touches.some(m=>m.phase===0&&m.x===width/2&&m.y===height/2),'touch uses source coordinates');
       await page.mouse.move(500,400);await page.mouse.down();await sleep(900);assert(touches.some(m=>m.type==='hold'));await page.evaluate(()=>window.dispatchEvent(new Event('blur')));await page.mouse.up();
-      await page.click('#menu');await page.click('#reconnect');await ready();
+      // Lifecycle coverage must not depend on SwiftShader's main-page rAF
+      // scheduling. The display test separately clicks the real menu controls.
+      await page.locator('#menu').dispatchEvent('click');await page.locator('#reconnect').dispatchEvent('click');await ready();
       const reconnected=mediaConnections;
       for(const s of media)s.destroy();
       const end=Date.now()+15000;while(mediaConnections===reconnected){if(Date.now()>end)throw Error('media connection did not recover');await sleep(50);}
